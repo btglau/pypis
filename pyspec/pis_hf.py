@@ -50,7 +50,18 @@ def getArgs():
     parser.add_argument('-r',type=float,help="radius (nm)",default=1)
     parser.add_argument('-m',type=float,help="effective mass",default=1)
     parser.add_argument('-j',help="file name to save results",default=None)
-    parser.add_argument('-T',help="levels of theory to use: give an unordered string with options needed (HF always done): (U)HF (C)IS, (T)DHF, CIS(D), (F)CI, (E)OM-CCSD')",default='')
+    parser.add_argument('-T',
+                        help='''
+                        levels of theory to use: give an unordered string with options 
+                        needed (HF always done): 
+                            (U)HF 
+                            (C)IS,
+                            (T)DHF, 
+                            CIS(D), 
+                            (F)CI, 
+                            (E)OM-CCSD')
+                        '''
+                        ,default='')
     return parser.parse_args()
     #parser.add_argument("fname", help="basis set file name (../basissets/[name])")
     #basisset_path = os.path.normpath('../basissets/' + args.fname)
@@ -204,6 +215,21 @@ def cgc(ll,lr,Ym,ml,mr):
     
     return c
 
+def sd(bra,ket,h1,MO):
+    '''
+    One electron operator matrix element between two slater determinants
+    <SD1|h(1)|SD2>
+    '''
+    orb_diff = bra-ket
+    if np.count_nonzero(bra-ket) == 2:
+        matelem = (np.outer(MO[:,orb_diff<0].conj(),MO[:,orb_diff>0])*h1).sum(axis=(0,1))
+    elif np.count_nonzero(bra-ket) == 0:
+        matelem = np.zeros(3)
+        for i in np.nditer(bra.nonzero()[0]):
+            matelem += bra[i]*(np.outer(MO[:,i].conj(),MO[:,i])*h1).sum(axis=(0,1))
+        
+    return matelem
+
 def spec_ao(R,lmax,n):
     '''
     calculate stick spectrum for AO / basis functions. the transition energies
@@ -242,8 +268,41 @@ def spec_ao(R,lmax,n):
     
     return sik,eik
 
+def spec_hf(R,lmax,mf):
+    '''
+    Calculate the stick spectrum for all singles excitations in a HF orbital basis
+    
+    Parameters
+    ----------
+    mf : mean field pyscf object
+    '''
+    nmo = mf.mo_coeff.shape[1]
+    nocc = np.count_nonzero(mf.mo_occ)
+    nvir = nmo - nocc    
+    
+    sik = np.zeros((nocc,nvir))
+    eik = np.zeros_like(sik)
+    # matrix elements between MOs
+    dmo = np.square(np.absolute(dip_mo(R,lmax,mf.mo_coeff)[2])).sum(axis=2)
+    
+    for o in range(nocc):
+        for v in range(nvir):
+            # because <Y_o^v|h1|Y_0> = <v|h1|o>
+            sik[o,v] = dmo[v+nocc,o]
+            eik[o,v] = mf.mo_energy[v+nocc] - mf.mo_energy[o]
+    # factor of 2 for a->a and b->b spins
+    # Szabo 2.3.5
+    sik *= 2
+    
+    return sik,eik
+
+def spec_singles():
+    
+    
+    return
+
 if __name__ == '__main__':
-    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib
+    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib, dft
     from pyscf.cc import gf
     
     # parse the input
@@ -298,34 +357,69 @@ if __name__ == '__main__':
     # physics notation -> transform to real basis -> back to chemists' notation
     mf._eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
     # free up space
-    mat_contents['eri'] = None
-    
+    mat_contents['eri'] = None 
     
     # begin electronic structure calculations ---------------------------------
+    # AO
+    n,lm,kln = pis_ao(args.l)
+    kln = np.square(kln)*E_scale
+    sik,eik = spec_ao(r,args.l,args.n)
+    E = {'AO':kln}
+    C = {'AO':{'n':n,'lm':lm}}
+    S = {'AO':{'sik':sik,'eik':eik*E_scale}}
+    
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
     mf.kernel()
-    E = {'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}}
-    C = {'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}}
+    sik,eik = spec_hf(r,args.l,mf)
+    E.update({'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}})
+    C.update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
     conv = {'HF':mf.converged}
+    S.update({'HF':{'sik':sik,'eik':eik*E_scale}})
     
-    # TDA(CIS)
+    # CIS - RPA with exchange and TDA
     if 'C' in args.T:
-        myTDA = tddft.TDA(mf)
-        myTDA.nstates = args.e;
-        myTDA.kernel()
-        E.update({'CIS':myTDA.e})
-        C.update({'CIS':myTDA.xy})
-        conv.update({'CIS':myTDA.converged})
+        td = tddft.TDA(mf)
+        td.nstates = args.e;
+        td.kernel()
+        E.update({'CIS':td.e})
+        C.update({'CIS':td.xy})
+        conv.update({'CIS':td.converged})
 
-    # TDHF(RPA)
+    # TDHF - RPA with exchange
     if 'T' in args.T:
-        myTDHF = tddft.TD(mf)
-        myTDHF.nstates = args.e;
-        myTDHF.kernel()
-        E.update({'TDHF':myTDHF.e})
-        C.update({'TDHF':myTDHF.xy})
-        conv.update({'TDHF':myTDHF.converged})
-        #myTDHF.e myTDHF.xy myTDHF.converged
+        td = tddft.TD(mf)
+        td.nstates = args.e;
+        td.kernel()
+        E.update({'TDHF':td.e})
+        C.update({'TDHF':td.xy})
+        conv.update({'TDHF':td.converged})
+        #td.e td.xy td.converged
+    
+    # RPA *with* exchange (=TDHF)
+    td = tddft.RPA(mf) # RPA means with exchange in PySCF
+    td.nstates = args.e
+    td.kernel()
+    
+    # RPA *with* exchange and TDA (=CIS)
+    td = tddft.TDA(mf)
+    td.nstates = args.e
+    td.kernel()
+    
+    # HF based RPA without exchange - done in DFT module
+    # dRPA/TDH can only be done via DFT
+    mf = dft.RKS(mol)
+    mf.xc = 'hf,' # this is HF
+    mf.scf()
+    
+    # RPA *without* exchange
+    td = tddft.dRPA(mf) # equivalent to tddft.TDH(mf)
+    td.nstates = args.e
+    td.kernel()
+    
+    # RPA *without* exchange with TDA - only A matrix
+    td.tddft.dTDA(mf)
+    td.nstates = args.e
+    td.kernel()
     
     # CISD
     # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
@@ -487,4 +581,4 @@ if __name__ == '__main__':
     # save results ------------------------------------------------------------
     if args.j is not None:
         output_path = os.path.normpath('../output_SCF/' + args.j)
-        sio.savemat(output_path,{'E':E,'C':C,'conv':conv})
+        sio.savemat(output_path,{'E':E,'C':C,'conv':conv,'S':S})
