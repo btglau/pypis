@@ -222,19 +222,23 @@ def spec_ao(R,lmax,n):
     
     lm,kln = pis_ao(lmax)[1:3]
     kln = np.square(kln) # energy
-    ind = np.lexsort(lm[:,1],kln)
+    ind = np.lexsort((lm[:,1],kln))
     # ao occupation 
     ao_occ = np.zeros(kln.size)
     # doubly occupied
-    ao_occ[ind[0:np.floor(n/2)+1]] = 2
+    docc = np.floor(n/2).astype(np.int_)
+    ao_occ[ind[0:docc]] = 2
     # singly occupied
     if n & 0x1:
-        ao_occ[ind[np.floor(n/2)+1]] = 1
+        ao_occ[ind[docc]] = 1
     
     dcart = np.square(np.absolute(dip_mo(R,lmax)[1])).sum(axis=2)
     # S_{ik}, E_{ik}
-    sik = dcart*1
-    eik = 0
+    sik = dcart*ao_occ[:,None] # transitions
+    sik = sik*(ao_occ[None,:] == 0) # cannot transition to filled orbitals
+    eik = kln[None,:] - kln[:,None]
+    eik = eik[sik.nonzero()]
+    sik = sik[sik.nonzero()]
     
     return sik,eik
 
@@ -295,8 +299,6 @@ if __name__ == '__main__':
     mf._eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
     # free up space
     mat_contents['eri'] = None
-    
-    # AO spectrum calclulation
     
     
     # begin electronic structure calculations ---------------------------------
