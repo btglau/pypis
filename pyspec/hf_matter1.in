@@ -1,0 +1,5 @@
+-e 5 -n 6 -r 1 -T CF -m 0.25
+-e 5 -n 6 -r 2 -T CF -m 0.25
+-e 5 -n 6 -r 4 -T CF -m 0.25
+-e 5 -n 6 -r 6 -T CF -m 0.25
+-e 5 -n 6 -r 8 -T CF -m 0.25

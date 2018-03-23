@@ -1,0 +1,6 @@
+# HF/CIS only
+-n 8 -r 1 -T C -m 0.25 -l 8
+-n 8 -r 2 -T C -m 0.25 -l 8
+-n 8 -r 4 -T C -m 0.25 -l 8
+-n 8 -r 6 -T C -m 0.25 -l 8
+-n 8 -r 8 -T C -m 0.25 -l 8
