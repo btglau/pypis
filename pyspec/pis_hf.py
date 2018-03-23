@@ -113,7 +113,7 @@ def pis_ao(lmax):
     
     return nlm[:,0],nlm[:,1:],kln,Nln
 
-def dip_mo(R,lmax,MO):
+def dip_mo(R,lmax,MO=None):
     '''
     calculate the dipole matrix elements between AOs, transform them to XYZ 
     cartesian form, then calculate the MO dipole matrix elements
@@ -126,7 +126,6 @@ def dip_mo(R,lmax,MO):
     # preallocate
     dpq = np.zeros((dsz,dsz,3))
     dcart = np.zeros_like(dpq,dtype=np.complex_)
-    dmo = np.zeros_like(dcart)
     
     # AO dipole matrix elements
     for i in range(dsz):
@@ -140,9 +139,13 @@ def dip_mo(R,lmax,MO):
     dcart[...,[0,1]] /= np.sqrt(2)
     
     # mo
-    for i in range(dsz):
-        for j in range(dsz):
-            dmo[i,j,:] = (np.outer(MO[:,i],MO[:,j])[...,None]*dcart).sum(axis=(0,1))
+    if MO is not None:
+        dmo = np.zeros_like(dcart)
+        for i in range(dsz):
+            for j in range(dsz):
+                dmo[i,j,:] = (np.outer(MO[:,i],MO[:,j])[...,None]*dcart).sum(axis=(0,1))
+    else:
+        dmo = None
     
     return dpq,dcart,dmo
 
@@ -201,6 +204,40 @@ def cgc(ll,lr,Ym,ml,mr):
     
     return c
 
+def spec_ao(R,lmax,n):
+    '''
+    calculate stick spectrum for AO / basis functions. the transition energies
+    are unscaled.
+    
+    Parameters
+    ----------
+    lmax : basis set size
+    R : size of QD
+    n : number of electrons
+    
+    Returns
+    -------
+    out : Arrays of stick spectrum energies and strengths
+    '''
+    
+    lm,kln = pis_ao(lmax)[1:3]
+    kln = np.square(kln) # energy
+    ind = np.lexsort(lm[:,1],kln)
+    # ao occupation 
+    ao_occ = np.zeros(kln.size)
+    # doubly occupied
+    ao_occ[ind[0:np.floor(n/2)+1]] = 2
+    # singly occupied
+    if n & 0x1:
+        ao_occ[ind[np.floor(n/2)+1]] = 1
+    
+    dcart = np.square(np.absolute(dip_mo(R,lmax)[1])).sum(axis=2)
+    # S_{ik}, E_{ik}
+    sik = dcart*1
+    eik = 0
+    
+    return sik,eik
+
 if __name__ == '__main__':
     from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib
     from pyscf.cc import gf
@@ -208,7 +245,9 @@ if __name__ == '__main__':
     # parse the input
     args = getArgs()
     
-    r = args.r*1E-9/sc.physical_constants['Bohr radius'][0] # nm input
+    a0 = sc.physical_constants['Bohr radius'][0]
+    Ha = sc.physical_constants['Hartree energy in eV'][0]
+    r = args.r*1E-9/a0 # nm input
     #r = args.r # atomic units input
     E_scale = 1/(2*args.m*r**2)
     
@@ -256,6 +295,9 @@ if __name__ == '__main__':
     mf._eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
     # free up space
     mat_contents['eri'] = None
+    
+    # AO spectrum calclulation
+    
     
     # begin electronic structure calculations ---------------------------------
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
