@@ -456,20 +456,9 @@ if __name__ == '__main__':
         conv.update({'CIS':td.converged})
         S.update({'CIS':{'sik':sik,'eik':eik*E_scale}})
 
-    if 'R' in args.T or 'A' in args.T:
-        # HF based RPA without exchange - done in DFT module
-        # dRPA/TDH and dTDA can only be done via DFT
-        mfks = dft.RKS(mol)
-        mfks.xc = 'hf,' # HF
-        mfks.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
-        mfks.get_ovlp = lambda *args: mat_contents['ovlp']
-        mfks._eri = pis_eri
-        mfks.init_guess = '1e'
-        mfks.scf()
-
     # RPA (A/B w/o exchange)
     if 'R' in args.T:
-        td = tddft.dRPA(mfks) # equivalent to tddft.TDH(mf)
+        td = tddft.dRPA(mf) # equivalent to tddft.TDH(mf)
         td.nstates = args.e
         td.kernel()
         E.update({'RPA':td.e})
@@ -478,7 +467,7 @@ if __name__ == '__main__':
     
     # RPA (A/- w/o exchange) (+TDA)
     if 'A' in args.T:
-        td.tddft.dTDA(mfks)
+        td.tddft.dTDA(mf)
         td.nstates = args.e
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
