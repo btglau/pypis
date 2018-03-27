@@ -53,13 +53,15 @@ def getArgs():
     parser.add_argument('-T',
                         help='''
                         levels of theory to use: give an unordered string with options 
-                        needed (HF always done): 
-                            (U)HF 
-                            (C)IS,
-                            (T)DHF, 
-                            CIS(D), 
-                            (F)CI, 
-                            (E)OM-CCSD')
+                        needed (HF always done):
+                            - (U)HF,
+                            - (R)PA (A/B w/o ex),
+                            - TD(A) (A/- w/o ex),
+                            - (T)DHF (A/B w/ ex),
+                            - (C)IS (A/- w/o ex),
+                            - CIS(D),
+                            - (F)CI,
+                            - (E)OM-CCSD')
                         '''
                         ,default='')
     return parser.parse_args()
@@ -135,28 +137,32 @@ def dip_mo(R,lmax,MO=None):
     dsz = kln.size
     
     # preallocate
-    dpq = np.zeros((dsz,dsz,3))
+    dpq = np.zeros((3,dsz,dsz))
     dcart = np.zeros_like(dpq,dtype=np.complex_)
     
     # AO dipole matrix elements
     for i in range(dsz):
         for j in range(dsz):
-            dpq[i,j,:] = dip_ao(R,lm[[i,j],0],lm[[i,j],1],kln[[i,j]],Nln[[i,j]])
+            dpq[:,i,j] = dip_ao(R,lm[[i,j],0],lm[[i,j],1],kln[[i,j]],Nln[[i,j]])
     
     # cartesian
-    dcart[...,2] = dpq[...,0] # z
-    dcart[...,0] = dpq[...,2] - dpq[...,1] # x
-    dcart[...,1] = 1j*(dpq[...,1] + dpq[...,2]) # y
-    dcart[...,[0,1]] /= np.sqrt(2)
+    dcart[2,...] = dpq[0,...] # z
+    dcart[0,...] = dpq[2,...] - dpq[1,...] # x
+    dcart[1,...] = 1j*(dpq[1,...] + dpq[2,...]) # y
+    dcart[[0,1],...] /= np.sqrt(2)
     
     # mo
     if MO is not None:
         dmo = np.zeros_like(dcart)
         for i in range(dsz):
             for j in range(dsz):
-                dmo[i,j,:] = (np.outer(MO[:,i],MO[:,j])[...,None]*dcart).sum(axis=(0,1))
+                #dmo[i,j,:] = (np.outer(MO[:,i],MO[:,j])[...,None]*dcart).sum(axis=(0,1))
+                # more compact & faster (matmul @) way
+                dmo[:,i,j] = MO[:,i].conj().T@dcart@MO[:,j]
+        # possible einsum: ab,rbd,cd->rac
+        #dmo = np.einsum('ab,rbd,cd->rac',MO.conj(),dcart,MO)
     else:
-        dmo = None
+        dmo = np.zeros(1)
     
     return dpq,dcart,dmo
 
@@ -219,14 +225,21 @@ def sd(bra,ket,h1,MO):
     '''
     One electron operator matrix element between two slater determinants
     <SD1|h(1)|SD2>
+    
+    To make use of matmul, please make sure that the h1 operator has the last
+    two indices corresponding to the atomic orbital matrix elements
     '''
     orb_diff = bra-ket
-    if np.count_nonzero(bra-ket) == 2:
-        matelem = (np.outer(MO[:,orb_diff<0].conj(),MO[:,orb_diff>0])*h1).sum(axis=(0,1))
-    elif np.count_nonzero(bra-ket) == 0:
-        matelem = np.zeros(3)
+    if np.count_nonzero(orb_diff) == 2:
+        #matelem = (np.outer(MO[:,orb_diff<0].conj(),MO[:,orb_diff>0])*h1).sum(axis=(0,1))
+        matelem = MO[:,orb_diff>0].conj().T@h1@MO[:,orb_diff<0]
+    elif np.count_nonzero(orb_diff) == 0:
+        matelem = np.zeros(h1.shape[0])
         for i in np.nditer(bra.nonzero()[0]):
-            matelem += bra[i]*(np.outer(MO[:,i].conj(),MO[:,i])*h1).sum(axis=(0,1))
+            #matelem += bra[i]*(np.outer(MO[:,i].conj(),MO[:,i])*h1).sum(axis=(0,1))
+            matelem += MO[:,i].conj().T@h1@MO[:,i]
+        # closed shell
+        matelem *= 2
         
     return matelem
 
@@ -258,7 +271,7 @@ def spec_ao(R,lmax,n):
     if n & 0x1:
         ao_occ[ind[docc]] = 1
     
-    dcart = np.square(np.absolute(dip_mo(R,lmax)[1])).sum(axis=2)
+    dcart = np.square(np.absolute(dip_mo(R,lmax)[1])).sum(axis=0)
     # S_{ik}, E_{ik}
     sik = dcart*ao_occ[:,None] # transitions
     sik = sik*(ao_occ[None,:] == 0) # cannot transition to filled orbitals
@@ -274,7 +287,7 @@ def spec_hf(R,lmax,mf):
     
     Parameters
     ----------
-    mf : mean field pyscf object
+    mf : pyscf scf object
     '''
     nmo = mf.mo_coeff.shape[1]
     nocc = np.count_nonzero(mf.mo_occ)
@@ -283,30 +296,75 @@ def spec_hf(R,lmax,mf):
     sik = np.zeros((nocc,nvir))
     eik = np.zeros_like(sik)
     # matrix elements between MOs
-    dmo = np.square(np.absolute(dip_mo(R,lmax,mf.mo_coeff)[2])).sum(axis=2)
+    dmo = np.square(np.absolute(dip_mo(R,lmax,mf.mo_coeff)[2])).sum(axis=0)
     
     for o in range(nocc):
         for v in range(nvir):
             # because <Y_o^v|h1|Y_0> = <v|h1|o>
+            # columns are ket, but sik and eik will be flattened anyways
             sik[o,v] = dmo[v+nocc,o]
             eik[o,v] = mf.mo_energy[v+nocc] - mf.mo_energy[o]
     # factor of 2 for a->a and b->b spins
     # Szabo 2.3.5
     sik *= 2
+    eik = eik[sik.nonzero()]
+    sik = sik[sik.nonzero()]
+    
+    return sik.ravel(),eik.ravel()
+
+def spec_singles(R,lmax,td,mf):
+    '''
+    Singles excitation based on a xy matrix, from a tddft pyscf object
+    
+    Parameters
+    ----------
+    td : pyscf tddft object
+    mf : pyscf scf object (for ground state)
+    '''
+    
+    sik = np.zeros(len(td.xy))
+    eik = td.e
+    # matrix elements between MOs
+    MO = mf.mo_coeff
+    dmo = dip_mo(R,lmax,MO)[2] # 3xNxN
+    for ind,(x,y) in enumerate(td.xy):
+        # shape of x,y in xy matrix is (nvir,nocc), recast it to (None,nvir,nocc)
+        nvir,nocc = x.shape
+        nmo = nvir + nocc
+        sik[ind] = np.square(np.absolute(((x+y)[None,...].conj()*dmo[:,nocc:nmo,0:nocc]))).sum();
+    eik = eik[sik.nonzero()]
+    sik = sik[sik.nonzero()]
+    sik *= 2
     
     return sik,eik
 
-def spec_singles():
-    
-    
-    return
+def polarizability(mol, mf, td, ao_dipole=None):
+    '''
+    A/B X/Y stick spectrum
+    Adapted from Berkelbach 2018
+    '''
+    mol.set_common_orig((0.0,0.0,0.0))
+    if ao_dipole is None:
+        ao_dipole = mol.intor_symmetric('int1e_r', comp=3) 
+    occidx = np.where(mf.mo_occ==2)[0] 
+    viridx = np.where(mf.mo_occ==0)[0] 
+    mo_coeff = mf.mo_coeff 
+    orbv,orbo = mo_coeff[:,viridx], mo_coeff[:,occidx] 
+    virocc_dip = np.einsum('xaq,qi->xai', np.einsum('pa,xpq->xaq', orbv, ao_dipole), orbo) 
+    sik = np.zeros(len(td.xy))
+    eik = td.e
+    for ind,(x,y) in enumerate(td.xy):
+        sik[ind] = np.square(np.absolute(np.einsum('xai,ai->x',virocc_dip, (x+y)))).sum()
+    eik = eik[sik.nonzero()]
+    sik = sik[sik.nonzero()]
+    sik *= 2
+    return sik,eik
 
 if __name__ == '__main__':
-    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib, dft
-    from pyscf.cc import gf
-    
     # parse the input
     args = getArgs()
+    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib, dft
+    #from pyscf.cc import gf
     
     a0 = sc.physical_constants['Bohr radius'][0]
     Ha = sc.physical_constants['Hartree energy in eV'][0]
@@ -333,6 +391,16 @@ if __name__ == '__main__':
     mol.nelectron = args.n
     # prevent pHF from crashing, i.e. force it to use provided AOs
     mol.incore_anyway = True
+    norb = int(mat_contents['args']['N'].item())
+    nelec = mol.nelec
+    
+    # because scipy.io can't load complex matrices
+    U = mat_contents['Ur'] + 1j*mat_contents['Ui']
+    # eri_phys_real = change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real
+    # physics notation -> transform to real basis -> back to chemists' notation
+    pis_eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
+    # free up space
+    mat_contents['eri'] = None 
     
     # check if open shell or closed shell problem, based on atomic orbitals
     if args.n not in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232] or 'U' in args.T:
@@ -347,25 +415,16 @@ if __name__ == '__main__':
     # set the core, overlap, and eri integrals
     mf.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
     mf.get_ovlp = lambda *args: mat_contents['ovlp']
-    norb = int(mat_contents['args']['N'].item())
-    nelec = mol.nelec
+    mf._eri = pis_eri
     mf.init_guess = '1e'
-    
-    # because scipy.io can't load complex matrices
-    U = mat_contents['Ur'] + 1j*mat_contents['Ui']
-    # eri_phys_real = change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real
-    # physics notation -> transform to real basis -> back to chemists' notation
-    mf._eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
-    # free up space
-    mat_contents['eri'] = None 
-    
+
     # begin electronic structure calculations ---------------------------------
     # AO
-    n,lm,kln = pis_ao(args.l)
+    n,lm,kln,Nln = pis_ao(args.l)
     kln = np.square(kln)*E_scale
     sik,eik = spec_ao(r,args.l,args.n)
     E = {'AO':kln}
-    C = {'AO':{'n':n,'lm':lm}}
+    C = {'AO':{'n':n,'lm':lm,'Nln':Nln}}
     S = {'AO':{'sik':sik,'eik':eik*E_scale}}
     
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
@@ -375,51 +434,58 @@ if __name__ == '__main__':
     C.update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
     conv = {'HF':mf.converged}
     S.update({'HF':{'sik':sik,'eik':eik*E_scale}})
-    
-    # CIS - RPA with exchange and TDA
-    if 'C' in args.T:
-        td = tddft.TDA(mf)
-        td.nstates = args.e;
-        td.kernel()
-        E.update({'CIS':td.e})
-        C.update({'CIS':td.xy})
-        conv.update({'CIS':td.converged})
 
-    # TDHF - RPA with exchange
+    # RPA (A/B w/ exchange) (=TDHF)
     if 'T' in args.T:
-        td = tddft.TD(mf)
-        td.nstates = args.e;
+        td = tddft.RPA(mf) # RPA means with exchange in PySCF
+        td.nstates = args.e
         td.kernel()
         E.update({'TDHF':td.e})
         C.update({'TDHF':td.xy})
         conv.update({'TDHF':td.converged})
         #td.e td.xy td.converged
     
-    # RPA *with* exchange (=TDHF)
-    td = tddft.RPA(mf) # RPA means with exchange in PySCF
-    td.nstates = args.e
-    td.kernel()
+    # RPA (A/- w/ exchange) (=CIS) (+TDA)
+    if 'C' in args.T:
+        td = tddft.TDA(mf)
+        td.nstates = args.e
+        td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
+        E.update({'CIS':td.e})
+        C.update({'CIS':td.xy})
+        conv.update({'CIS':td.converged})
+        S.update({'CIS':{'sik':sik,'eik':eik*E_scale}})
+
+    if 'R' in args.T or 'A' in args.T:
+        # HF based RPA without exchange - done in DFT module
+        # dRPA/TDH and dTDA can only be done via DFT
+        mfks = dft.RKS(mol)
+        mfks.xc = 'hf,' # HF
+        mfks.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
+        mfks.get_ovlp = lambda *args: mat_contents['ovlp']
+        mfks._eri = pis_eri
+        mfks.init_guess = '1e'
+        mfks.scf()
+
+    # RPA (A/B w/o exchange)
+    if 'R' in args.T:
+        td = tddft.dRPA(mfks) # equivalent to tddft.TDH(mf)
+        td.nstates = args.e
+        td.kernel()
+        E.update({'RPA':td.e})
+        C.update({'RPA':td.xy})
+        conv.update({'RPA':td.converged})
     
-    # RPA *with* exchange and TDA (=CIS)
-    td = tddft.TDA(mf)
-    td.nstates = args.e
-    td.kernel()
-    
-    # HF based RPA without exchange - done in DFT module
-    # dRPA/TDH can only be done via DFT
-    mf = dft.RKS(mol)
-    mf.xc = 'hf,' # this is HF
-    mf.scf()
-    
-    # RPA *without* exchange
-    td = tddft.dRPA(mf) # equivalent to tddft.TDH(mf)
-    td.nstates = args.e
-    td.kernel()
-    
-    # RPA *without* exchange with TDA - only A matrix
-    td.tddft.dTDA(mf)
-    td.nstates = args.e
-    td.kernel()
+    # RPA (A/- w/o exchange) (+TDA)
+    if 'A' in args.T:
+        td.tddft.dTDA(mfks)
+        td.nstates = args.e
+        td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
+        E.update({'TDA':td.e})
+        C.update({'TDA':td.xy})
+        conv.update({'TDA':td.converged})
+        S.update({'TDA':{'sik':sik,'eik':eik*E_scale}})
     
     # CISD
     # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
