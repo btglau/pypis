@@ -332,8 +332,8 @@ def spec_singles(R,lmax,td,mf):
         nvir,nocc = x.shape
         nmo = nvir + nocc
         sik[ind] = np.square(np.absolute(((x+y)[None,...].conj()*dmo[:,nocc:nmo,0:nocc]))).sum();
-    eik = eik[sik.nonzero()]
-    sik = sik[sik.nonzero()]
+    eik = eik[sik > np.finfo(np.float_).eps]
+    sik = sik[sik > np.finfo(np.float_).eps]
     sik *= 2
     
     return sik,eik
@@ -363,7 +363,7 @@ def polarizability(mol, mf, td, ao_dipole=None):
 if __name__ == '__main__':
     # parse the input
     args = getArgs()
-    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib, dft
+    from pyscf import gto, scf, ao2mo, ci, cc, tddft, fci, lib
     #from pyscf.cc import gf
     
     a0 = sc.physical_constants['Bohr radius'][0]
@@ -440,9 +440,11 @@ if __name__ == '__main__':
         td = tddft.RPA(mf) # RPA means with exchange in PySCF
         td.nstates = args.e
         td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'TDHF':td.e})
         C.update({'TDHF':td.xy})
         conv.update({'TDHF':td.converged})
+        S.update({'TDHF':{'sik':sik,'eik':eik*E_scale}})
         #td.e td.xy td.converged
     
     # RPA (A/- w/ exchange) (=CIS) (+TDA)
@@ -455,19 +457,24 @@ if __name__ == '__main__':
         C.update({'CIS':td.xy})
         conv.update({'CIS':td.converged})
         S.update({'CIS':{'sik':sik,'eik':eik*E_scale}})
+    
+    if 'R' in args.T or 'A' in args.T:
+        from pyscf.tddft import rhf_slow
 
-    # RPA (A/B w/o exchange)
+    # RPA (A/B w/o exchange) (RPA)
     if 'R' in args.T:
-        td = tddft.dRPA(mf) # equivalent to tddft.TDH(mf)
+        td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
         td.nstates = args.e
         td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'RPA':td.e})
         C.update({'RPA':td.xy})
         conv.update({'RPA':td.converged})
+        S.update({'RPA':{'sik':sik,'eik':eik*E_scale}})
     
     # RPA (A/- w/o exchange) (+TDA)
     if 'A' in args.T:
-        td.tddft.dTDA(mf)
+        td = rhf_slow.dTDA(mf)
         td.nstates = args.e
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
@@ -513,7 +520,7 @@ if __name__ == '__main__':
         
     # cisd_slow
     # from pyscf.ci import cisd_slow
-    # myci = ci.cisd_slow.CISD(mf)
+    # myci = cisd_slow.CISD(mf)
     # myci.verbose = 1
     # e,c = myci.kernel()
     # cisd_slow.to_fci is less featured and buggy

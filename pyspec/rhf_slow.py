@@ -7,6 +7,7 @@
 Slow explicit TDHF/TDH
 '''
 
+from functools import reduce
 import time
 import tempfile
 import numpy
