@@ -46,7 +46,9 @@ def getArgs():
     parser.add_argument('-V',type=int,help="basis set size for VB",default=None)
     parser.add_argument('-n',type=int,help="number of electrons",default=1)
     parser.add_argument('-d',type=float,help="dielectric constant",default=1)
-    parser.add_argument('-e',type=int,help="number of excitations (1 = ground state only)",default=1)
+    parser.add_argument('-e',type=int,help='''number of excitations (1 = ground state only, 
+                                                                     0 = as many as the basis set size)'''
+                        ,default=1)
     parser.add_argument('-r',type=float,help="radius (nm)",default=1)
     parser.add_argument('-m',type=float,help="effective mass",default=1)
     parser.add_argument('-j',help="file name to save results",default=None)
@@ -427,6 +429,9 @@ if __name__ == '__main__':
     C = {'AO':{'n':n,'lm':lm,'Nln':Nln}}
     S = {'AO':{'sik':sik,'eik':eik*E_scale}}
     
+    if args.e < 1:
+        args.e = Nln.size
+    
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
     mf.kernel()
     sik,eik = spec_hf(r,args.l,mf)
@@ -442,7 +447,7 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'TDHF':td.e})
-        C.update({'TDHF':td.xy})
+        C.update({'TDHF':{'x':[i[0] for i in td.xy],'y':[i[1] for i in td.xy]}})
         conv.update({'TDHF':td.converged})
         S.update({'TDHF':{'sik':sik,'eik':eik*E_scale}})
         #td.e td.xy td.converged
@@ -468,7 +473,7 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'RPA':td.e})
-        C.update({'RPA':td.xy})
+        C.update({'RPA':{'x':[i[0] for i in td.xy],'y':[i[1] for i in td.xy]}})
         conv.update({'RPA':td.converged})
         S.update({'RPA':{'sik':sik,'eik':eik*E_scale}})
     
@@ -581,18 +586,42 @@ if __name__ == '__main__':
          
     # (R/U)CCSD + EOM-EE + GF spectrum
     if 'E' in args.T:
+        from pyscf.cc import gf
         if closed_shell:
             mycc = cc.RCCSD(mf)
         else:
             mycc = cc.UCCSD(mf)
-        mycc.conv_tol = 1e-7
+        # Do the ground state CCSD calculation
+        mycc.conv_tol = 1e-8
         mycc.kernel()
-        ntot = mycc.t1.size
         mycc.solve_lambda()
+        nocc, nvir = mycc.t1.shape
+        ntot = nocc+nvir
+        
+        CCSD_C = list()
+        # Calculate the diagonal of the RDM for ground state      
+        rdm = np.zeros(ntot)
+        for i in range(ntot):
+            rdm[i] = gf.rdm(mycc,i,i)
+        CCSD_C.append({'rdm':rdm})
+        	
+        # Calculate and biorthonormalise the right and left eigenvectors
+        e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
+        e_ee_l, l_ee = mycc.eomee_ccsd_singlet(args.e, left = True)
+        r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
+        
+        # Calculate the diagonal of the RDM for each excited state     
+        tot = np.zeros((ntot,args.e))
+        for i in range(ntot):
+            tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
+            print(i,tot[i,:])
+        CCSD_C.append({'erdm':tot})
+        
         E.update({'CCSD':mycc.e_corr})
-        C.update({'CCSD':None}) # placeholder for RDM
+        C.update({'CCSD':CCSD_C}) # placeholder for RDM
         conv.update({'CCSD':mycc.converged})
         
+    if 'z' in args.T:
         #----------SPECTRUM DETAILS --------------
         gf1 = gf.OneParticleGF()
         dw = 0.001
@@ -603,7 +632,7 @@ if __name__ == '__main__':
         eta = 0.000125
         gf1.gmres_tol = 1e-5
         
-        dpq = np.loadtxt("dpq_l4_r1_d10_m25.txt",complex)    
+        dpq = dip_mo(r,args.l,mf.mo_coeff)[2]   
         dpq = dpq.reshape(ntot,ntot,3)
         
         #----------EE SPECTRUM SECTION --------------
@@ -618,27 +647,9 @@ if __name__ == '__main__':
                         spectrum -= np.imag(EEgf[p,q,r,s,:])
         spectrum /= np.pi
             
-        with open("EEspectrum_l"+str(l)+"_r"+str(int(rnm))+".txt", "w") as f:
+        with open("EEspectrum_l"+str(args.l)+"_r"+str(int(r))+".txt", "w") as f:
             for i,s in enumerate(spectrum):
                 f.write(str(wmin+dw*i) + "    " + str(s) + "\n")
-        
-        # EOM-EE
-        #eee,cee = mycc.eeccsd(nroots=args.e)
-        # singlet excitations only
-        eee,cee = mycc.eomee_ccsd_singlet(nroots=args.e)
-        EECCSD_C = list()
-        for a in range(args.e):
-            # number of mo's, 
-            # number of occupied mo's
-            # (nvir = nmo - nocc)
-            # need to convert fci ci vector into cisd vec, then cisd amplitudes (hacky)
-            if args.e > 1:
-                r1,r2 = mycc.vector_to_amplitudes_ee(cee[a])
-            else:
-                r1,r2 = mycc.vector_to_amplitudes_ee(cee)
-            EECCSD_C.append({'r1':r1,'r2':r2})
-        E.update({'EECCSD':eee})
-        C.update({'EECCSD':EECCSD_C})
     
     # save results ------------------------------------------------------------
     if args.j is not None:

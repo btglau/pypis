@@ -33,7 +33,8 @@ def main():
     comegas = np.linspace(0.0, 1.0, num=300)+1j*0.01
     spec = polarizability(mol, mf, rpa, comegas)
     for w, s in zip(comegas, spec):
-        print w.real, s[0].real, s[0].imag, s[1].real, s[1].imag, s[2].real, s[2].imag
+        print(w.real, s[0].real, s[0].imag, s[1].real, s[1].imag, s[2].real, s[2].imag)
+    print(spec.shape)
 
 if __name__ == '__main__':
     main()
