@@ -1,16 +1,6 @@
-# HF/CIS only
--n 18 -r 1 -T C -m 0.25 -l 8
--n 18 -r 2 -T C -m 0.25 -l 8
--n 18 -r 4 -T C -m 0.25 -l 8
--n 18 -r 6 -T C -m 0.25 -l 8
--n 18 -r 8 -T C -m 0.25 -l 8
--n 20 -r 1 -T C -m 0.25 -l 8
--n 20 -r 2 -T C -m 0.25 -l 8
--n 20 -r 4 -T C -m 0.25 -l 8
--n 20 -r 6 -T C -m 0.25 -l 8
--n 20 -r 8 -T C -m 0.25 -l 8
--n 34 -r 1 -T C -m 0.25 -l 8
--n 34 -r 2 -T C -m 0.25 -l 8
--n 34 -r 4 -T C -m 0.25 -l 8
--n 34 -r 6 -T C -m 0.25 -l 8
--n 34 -r 8 -T C -m 0.25 -l 8
+# HF/singles
+-e 0 -n 8 -r 1 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 2 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 4 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 6 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 8 -T RATC -s 0.25 -l 8

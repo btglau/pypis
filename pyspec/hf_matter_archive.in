@@ -1,29 +1,29 @@
 # HF only
--n 2 -r 1 -m 0.25
--n 2 -r 2 -m 0.25
--n 2 -r 4 -m 0.25
--n 2 -r 6 -m 0.25
--n 2 -r 8 -m 0.25
--n 4 -r 1 -m 0.25
--n 4 -r 2 -m 0.25
--n 4 -r 4 -m 0.25
--n 4 -r 6 -m 0.25
--n 4 -r 8 -m 0.25
--n 6 -r 1 -m 0.25
--n 6 -r 2 -m 0.25
--n 6 -r 4 -m 0.25
--n 6 -r 6 -m 0.25
--n 6 -r 8 -m 0.25
--n 8 -r 1 -m 0.25
--n 8 -r 2 -m 0.25
--n 8 -r 4 -m 0.25
--n 8 -r 6 -m 0.25
--n 8 -r 8 -m 0.25
--n 10 -r 1 -m 0.25
--n 10 -r 2 -m 0.25
--n 10 -r 4 -m 0.25
--n 10 -r 6 -m 0.25
--n 10 -r 8 -m 0.25
+-n 2 -r 1 -s 0.25
+-n 2 -r 2 -s 0.25
+-n 2 -r 4 -s 0.25
+-n 2 -r 6 -s 0.25
+-n 2 -r 8 -s 0.25
+-n 4 -r 1 -s 0.25
+-n 4 -r 2 -s 0.25
+-n 4 -r 4 -s 0.25
+-n 4 -r 6 -s 0.25
+-n 4 -r 8 -s 0.25
+-n 6 -r 1 -s 0.25
+-n 6 -r 2 -s 0.25
+-n 6 -r 4 -s 0.25
+-n 6 -r 6 -s 0.25
+-n 6 -r 8 -s 0.25
+-n 8 -r 1 -s 0.25
+-n 8 -r 2 -s 0.25
+-n 8 -r 4 -s 0.25
+-n 8 -r 6 -s 0.25
+-n 8 -r 8 -s 0.25
+-n 10 -r 1 -s 0.25
+-n 10 -r 2 -s 0.25
+-n 10 -r 4 -s 0.25
+-n 10 -r 6 -s 0.25
+-n 10 -r 8 -s 0.25
 
 -e 20 -n 2 -r 1
 -e 20 -n 2 -r 2
@@ -38,21 +38,21 @@
 -e 14 -n 2 -r 50
 -e 14 -n 2 -r 100
 
-HgS
--d 11.4 -e 10 -n 2 -r 1 -m 0.051
--d 11.4 -e 10 -n 2 -r 2 -m 0.059
--d 11.4 -e 10 -n 2 -r 4 -m 0.089
--d 11.4 -e 10 -n 2 -r 6 -m 0.16
--d 11.4 -e 10 -n 2 -r 8 -m 0.385
+#HgS
+-d 11.4 -e 10 -n 2 -r 1 -s 0.051
+-d 11.4 -e 10 -n 2 -r 2 -s 0.059
+-d 11.4 -e 10 -n 2 -r 4 -s 0.089
+-d 11.4 -e 10 -n 2 -r 6 -s 0.16
+-d 11.4 -e 10 -n 2 -r 8 -s 0.385
 
-Semiconductor input
+#Semiconductor input
 -e 5 -n 2 -r 1 -d 11.4
 -e 5 -n 2 -r 2 -d 11.4
 -e 5 -n 2 -r 4 -d 11.4
 -e 5 -n 2 -r 6 -d 11.4
 -e 5 -n 2 -r 8 -d 11.4
 
-nm input
+#nm input
 -e 5 -n 2 -r 1
 -e 5 -n 2 -r 2
 -e 5 -n 2 -r 4
@@ -64,7 +64,7 @@ nm input
 -e 10 -n 2 -r 6
 -e 10 -n 2 -r 8
 
-Try with FCI
+#Try with FCI
  -T CF
 -e 20 -n 2 -r 1 -T CF
 -e 20 -n 2 -r 2 -T CF
@@ -72,7 +72,7 @@ Try with FCI
 -e 20 -n 2 -r 6 -T CF
 -e 20 -n 2 -r 8 -T CF
 
-'Semiconductor'
+#'Semiconductor'
 -e 150 -n 2 -r 1 -T CF
 -e 150 -n 2 -r 2 -T CF
 -e 150 -n 2 -r 4 -T CF
@@ -83,43 +83,67 @@ Try with FCI
 -e 150 -n 2 -r 4 -T CF -d 10
 -e 150 -n 2 -r 6 -T CF -d 10
 -e 150 -n 2 -r 8 -T CF -d 10
--e 150 -n 2 -r 1 -T CF -d 10 -m 0.1
--e 150 -n 2 -r 2 -T CF -d 10 -m 0.1
--e 150 -n 2 -r 4 -T CF -d 10 -m 0.1
--e 150 -n 2 -r 6 -T CF -d 10 -m 0.1
--e 150 -n 2 -r 8 -T CF -d 10 -m 0.1
--e 150 -n 2 -r 1 -T CF -d 10 -m 0.25
--e 150 -n 2 -r 2 -T CF -d 10 -m 0.25
--e 150 -n 2 -r 4 -T CF -d 10 -m 0.25
--e 150 -n 2 -r 6 -T CF -d 10 -m 0.25
--e 150 -n 2 -r 8 -T CF -d 10 -m 0.25
+-e 150 -n 2 -r 1 -T CF -d 10 -s 0.1
+-e 150 -n 2 -r 2 -T CF -d 10 -s 0.1
+-e 150 -n 2 -r 4 -T CF -d 10 -s 0.1
+-e 150 -n 2 -r 6 -T CF -d 10 -s 0.1
+-e 150 -n 2 -r 8 -T CF -d 10 -s 0.1
+-e 150 -n 2 -r 1 -T CF -d 10 -s 0.25
+-e 150 -n 2 -r 2 -T CF -d 10 -s 0.25
+-e 150 -n 2 -r 4 -T CF -d 10 -s 0.25
+-e 150 -n 2 -r 6 -T CF -d 10 -s 0.25
+-e 150 -n 2 -r 8 -T CF -d 10 -s 0.25
 
-Semi-envelope approx: only effective mass
--e 150 -n 2 -r 1 -T CF -m 0.25
--e 150 -n 2 -r 2 -T CF -m 0.25
--e 150 -n 2 -r 4 -T CF -m 0.25
--e 150 -n 2 -r 6 -T CF -m 0.25
--e 150 -n 2 -r 8 -T CF -m 0.25
--e 50 -n 4 -r 1 -T CF -m 0.25
--e 50 -n 4 -r 2 -T CF -m 0.25
--e 50 -n 4 -r 4 -T CF -m 0.25
--e 50 -n 4 -r 6 -T CF -m 0.25
--e 50 -n 4 -r 8 -T CF -m 0.25
--e 20 -n 6 -r 1 -T CF -m 0.25
--e 20 -n 6 -r 2 -T CF -m 0.25
--e 20 -n 6 -r 4 -T CF -m 0.25
--e 20 -n 6 -r 6 -T CF -m 0.25
--e 20 -n 6 -r 8 -T CF -m 0.25
+#Semi-envelope approx: only effective mass
+-e 150 -n 2 -r 1 -T CF -s 0.25
+-e 150 -n 2 -r 2 -T CF -s 0.25
+-e 150 -n 2 -r 4 -T CF -s 0.25
+-e 150 -n 2 -r 6 -T CF -s 0.25
+-e 150 -n 2 -r 8 -T CF -s 0.25
+-e 50 -n 4 -r 1 -T CF -s 0.25
+-e 50 -n 4 -r 2 -T CF -s 0.25
+-e 50 -n 4 -r 4 -T CF -s 0.25
+-e 50 -n 4 -r 6 -T CF -s 0.25
+-e 50 -n 4 -r 8 -T CF -s 0.25
+-e 20 -n 6 -r 1 -T CF -s 0.25
+-e 20 -n 6 -r 2 -T CF -s 0.25
+-e 20 -n 6 -r 4 -T CF -s 0.25
+-e 20 -n 6 -r 6 -T CF -s 0.25
+-e 20 -n 6 -r 8 -T CF -s 0.25
 
--e 25 -n 4 -r 1 -T CF -m 0.25
--e 25 -n 4 -r 2 -T CF -m 0.25
--e 25 -n 4 -r 4 -T CF -m 0.25
--e 25 -n 4 -r 6 -T CF -m 0.25
--e 25 -n 4 -r 8 -T CF -m 0.25
+-e 25 -n 4 -r 1 -T CF -s 0.25
+-e 25 -n 4 -r 2 -T CF -s 0.25
+-e 25 -n 4 -r 4 -T CF -s 0.25
+-e 25 -n 4 -r 6 -T CF -s 0.25
+-e 25 -n 4 -r 8 -T CF -s 0.25
 
 # CIS with large basis set
--e 150 -n 2 -r 1 -T C -m 0.25 -l 8
--e 150 -n 2 -r 2 -T C -m 0.25 -l 8
--e 150 -n 2 -r 4 -T C -m 0.25 -l 8
--e 150 -n 2 -r 6 -T C -m 0.25 -l 8
--e 150 -n 2 -r 8 -T C -m 0.25 -l 8
+-e 150 -n 2 -r 1 -T C -s 0.25 -l 8
+-e 150 -n 2 -r 2 -T C -s 0.25 -l 8
+-e 150 -n 2 -r 4 -T C -s 0.25 -l 8
+-e 150 -n 2 -r 6 -T C -s 0.25 -l 8
+-e 150 -n 2 -r 8 -T C -s 0.25 -l 8
+
+
+# new input style
+# HF/singles
+-e 0 -n 2 -r 1 -T RATC -s 0.25 -l 8
+-e 0 -n 2 -r 2 -T RATC -s 0.25 -l 8
+-e 0 -n 2 -r 4 -T RATC -s 0.25 -l 8
+-e 0 -n 2 -r 6 -T RATC -s 0.25 -l 8
+-e 0 -n 2 -r 8 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 1 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 2 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 4 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 6 -T RATC -s 0.25 -l 8
+-e 0 -n 8 -r 8 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 1 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 2 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 4 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 6 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 8 -T RATC -s 0.25 -l 8
+-e 0 -n 20 -r 1 -T RATC -s 0.25 -l 8
+-e 0 -n 20 -r 2 -T RATC -s 0.25 -l 8
+-e 0 -n 20 -r 4 -T RATC -s 0.25 -l 8
+-e 0 -n 20 -r 6 -T RATC -s 0.25 -l 8
+-e 0 -n 20 -r 8 -T RATC -s 0.25 -l 8

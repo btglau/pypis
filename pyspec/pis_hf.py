@@ -42,16 +42,17 @@ def getArgs():
     # get args from command line sys.argv[1:]
     parser = argparse.ArgumentParser(description="Do a pyscf calculation on a basis set")
     parser.add_argument('-l',type=int,help="basis set size to use",default=4)
-    parser.add_argument('-C',type=int,help="basis set size for CB",default=None)
-    parser.add_argument('-V',type=int,help="basis set size for VB",default=None)
+    parser.add_argument('-C',type=int,help="basis set size for CB",default=0)
+    parser.add_argument('-V',type=int,help="basis set size for VB",default=0)
     parser.add_argument('-n',type=int,help="number of electrons",default=1)
     parser.add_argument('-d',type=float,help="dielectric constant",default=1)
-    parser.add_argument('-e',type=int,help='''number of excitations (1 = ground state only, 
-                                                                     0 = as many as the basis set size)'''
+    parser.add_argument('-e',type=float,help='''number of excitations (1 = ground state only, 
+                                                                     0 = as many as the basis set size,
+                                                                     (0,1) fraction of basis size'''
                         ,default=1)
     parser.add_argument('-r',type=float,help="radius (nm)",default=1)
-    parser.add_argument('-m',type=float,help="effective mass",default=1)
-    parser.add_argument('-j',help="file name to save results",default=None)
+    parser.add_argument('-s',type=float,help="effective mass (m^(s)tar)",default=1)
+    parser.add_argument('-j',help="file name to save results",default=0)
     parser.add_argument('-T',
                         help='''
                         levels of theory to use: give an unordered string with options 
@@ -340,6 +341,18 @@ def spec_singles(R,lmax,td,mf):
     
     return sik,eik
 
+def unpack_xy(xy):
+    '''
+    take a td.xy list and unpack it into a dictionary of x and y
+    
+    Parameters
+    ----------
+    xy : list of x y matrices
+    '''
+    x = [i[0] for i in xy]
+    y = [i[1] for i in xy]
+    return {'x':x,'y':y}
+
 def polarizability(mol, mf, td, ao_dipole=None):
     '''
     A/B X/Y stick spectrum
@@ -372,13 +385,7 @@ if __name__ == '__main__':
     Ha = sc.physical_constants['Hartree energy in eV'][0]
     r = args.r*1E-9/a0 # nm input
     #r = args.r # atomic units input
-    E_scale = 1/(2*args.m*r**2)
-    
-    # python 3 style printing
-    print('PIS pyscf')
-    print('Basis set size: l={0}'.format(args.l))
-    print('{0} electrons'.format(args.n))
-    print('{0} threads'.format(lib.num_threads()))
+    E_scale = 1/(2*args.s*np.square(r))
     
     # load the mat file
     l_path = os.path.normpath('../basissets/' + '*l{}*.mat'.format(args.l))
@@ -395,6 +402,13 @@ if __name__ == '__main__':
     mol.incore_anyway = True
     norb = int(mat_contents['args']['N'].item())
     nelec = mol.nelec
+    
+    # python 3 style printing
+    print('PIS pyscf')
+    print('Basis set size: l = {0}, # fn\'s: {1}'.format(args.l,norb))
+    print('{0} electrons'.format(args.n))
+    print('{0} threads'.format(lib.num_threads()))
+    print('{0} memory assigned'.format(mol.max_memory))
     
     # because scipy.io can't load complex matrices
     U = mat_contents['Ur'] + 1j*mat_contents['Ui']
@@ -430,7 +444,11 @@ if __name__ == '__main__':
     S = {'AO':{'sik':sik,'eik':eik*E_scale}}
     
     if args.e < 1:
-        args.e = Nln.size
+        if args.e <= 0:
+            args.e = Nln.size
+        else:
+            args.e = Nln.size*args.e
+    args.e = int(args.e)
     
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
     mf.kernel()
@@ -438,7 +456,7 @@ if __name__ == '__main__':
     E.update({'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}})
     C.update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
     conv = {'HF':mf.converged}
-    S.update({'HF':{'sik':sik,'eik':eik*E_scale}})
+    S.update({'HF':{'sik':sik,'eik':eik}})
 
     # RPA (A/B w/ exchange) (=TDHF)
     if 'T' in args.T:
@@ -447,9 +465,9 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'TDHF':td.e})
-        C.update({'TDHF':{'x':[i[0] for i in td.xy],'y':[i[1] for i in td.xy]}})
+        C.update({'TDHF':unpack_xy(td.xy)})
         conv.update({'TDHF':td.converged})
-        S.update({'TDHF':{'sik':sik,'eik':eik*E_scale}})
+        S.update({'TDHF':{'sik':sik,'eik':eik}})
         #td.e td.xy td.converged
     
     # RPA (A/- w/ exchange) (=CIS) (+TDA)
@@ -459,9 +477,9 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'CIS':td.e})
-        C.update({'CIS':td.xy})
+        C.update({'CIS':unpack_xy(td.xy)})
         conv.update({'CIS':td.converged})
-        S.update({'CIS':{'sik':sik,'eik':eik*E_scale}})
+        S.update({'CIS':{'sik':sik,'eik':eik}})
     
     if 'R' in args.T or 'A' in args.T:
         from pyscf.tddft import rhf_slow
@@ -473,9 +491,9 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'RPA':td.e})
-        C.update({'RPA':{'x':[i[0] for i in td.xy],'y':[i[1] for i in td.xy]}})
+        C.update({'RPA':unpack_xy(td.xy)})
         conv.update({'RPA':td.converged})
-        S.update({'RPA':{'sik':sik,'eik':eik*E_scale}})
+        S.update({'RPA':{'sik':sik,'eik':eik}})
     
     # RPA (A/- w/o exchange) (+TDA)
     if 'A' in args.T:
@@ -484,9 +502,9 @@ if __name__ == '__main__':
         td.kernel()
         sik,eik = spec_singles(r,args.l,td,mf)
         E.update({'TDA':td.e})
-        C.update({'TDA':td.xy})
+        C.update({'TDA':unpack_xy(td.xy)})
         conv.update({'TDA':td.converged})
-        S.update({'TDA':{'sik':sik,'eik':eik*E_scale}})
+        S.update({'TDA':{'sik':sik,'eik':eik}})
     
     # CISD
     # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
@@ -637,7 +655,6 @@ if __name__ == '__main__':
         
         #----------EE SPECTRUM SECTION --------------
         EEgf = gf1.solve_2pgf(mycc,range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dpq)
-    
         spectrum = np.zeros((len(omegas)))
         for p in range(ntot):
             for r in range(ntot):
@@ -652,6 +669,6 @@ if __name__ == '__main__':
                 f.write(str(wmin+dw*i) + "    " + str(s) + "\n")
     
     # save results ------------------------------------------------------------
-    if args.j is not None:
+    if args.j != 0:
         output_path = os.path.normpath('../output_SCF/' + args.j)
-        sio.savemat(output_path,{'E':E,'C':C,'conv':conv,'S':S})
+        sio.savemat(output_path,{'E':E,'C':C,'conv':conv,'S':S,'args':args},oned_as='column')
