@@ -410,14 +410,6 @@ if __name__ == '__main__':
     print('{0} threads'.format(lib.num_threads()))
     print('{0} memory assigned'.format(mol.max_memory))
     
-    # because scipy.io can't load complex matrices
-    U = mat_contents['Ur'] + 1j*mat_contents['Ui']
-    # eri_phys_real = change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real
-    # physics notation -> transform to real basis -> back to chemists' notation
-    pis_eri = ao2mo.restore(8,change_basis_2el_complex(mat_contents['eri'].transpose(0,2,1,3),U).real.transpose(0,2,1,3) / args.d / r,norb)
-    # free up space
-    mat_contents['eri'] = None 
-    
     # check if open shell or closed shell problem, based on atomic orbitals
     if args.n not in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232] or 'U' in args.T:
         print('Open shell system')
@@ -431,7 +423,8 @@ if __name__ == '__main__':
     # set the core, overlap, and eri integrals
     mf.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
     mf.get_ovlp = lambda *args: mat_contents['ovlp']
-    mf._eri = pis_eri
+    # pre-transformed eri
+    mf._eri = mat_contents['eri'] / args.d / r
     mf.init_guess = '1e'
 
     # begin electronic structure calculations ---------------------------------
