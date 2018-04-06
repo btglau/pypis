@@ -1,13 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Sep 25 15:13:24 2017
+May 5 2018
+
+HF MWE
 
 @author: Bryan Lau
-
-1/19/2018 - change CISD to FCI, to get singlet states easily
-3/8/2018 - add UHF capability, move from c0, c1, and c2 to rdm
-3/16/2018 - switch EE-CCSD part to GF based
-3/23/2018 - add python functions for calculating spectra
 """
 
 import os, glob, argparse
@@ -15,28 +12,6 @@ import numpy as np
 import scipy.io as sio
 import scipy.constants as sc
 from scipy import special, integrate
-
-'''
-upon execution, this program should look up a directory, then into a folder
-called 'basissets'. It will load the appropriate basis set size, then do some
-combination of HF / pHF. For a single band only.
-'''
-
-'''
-User-defined Hamiltonian for SCF module.
-
-Three steps to define Hamiltonian for SCF:
-1. Specify the number of electrons. (Note mole object must be "built" before doing this step)
-2. Overwrite three attributes of scf object
-    .get_hcore
-    .get_ovlp
-    ._eri
-3. Specify initial guess (to overwrite the default atomic density initial guess)
-
-Note you will see warning message on the screen:
-
-        overwrite keys get_ovlp get_hcore of <class 'pyscf.scf.hf.RHF'>
-'''
 
 def getArgs():
     # get args from command line sys.argv[1:]
@@ -62,13 +37,14 @@ def getArgs():
                             - TD(A) (A/- w/o ex),
                             - (T)DHF (A/B w/ ex),
                             - (C)IS (A/- w/o ex),
-                            --(H) diagonalizes full H for (T)DHF and (R)PA,
                             - CIS(D),
                             - (F)CI,
                             - (E)OM-CCSD')
                         '''
                         ,default='')
     return parser.parse_args()
+    #parser.add_argument("fname", help="basis set file name (../basissets/[name])")
+    #basisset_path = os.path.normpath('../basissets/' + args.fname)
 
 def change_basis_2el_complex(g,C):
     """Change basis for 2-el integrals with complex coefficients and return.
@@ -247,8 +223,8 @@ def sd(bra,ket,h1,MO):
 
 def spec_ao(R,lmax,n):
     '''
-    Calculate stick spectrum for unitless AO / basis functions. 
-    The transition energies are unscaled.
+    calculate stick spectrum for AO / basis functions. the transition energies
+    are unscaled.
     
     Parameters
     ----------
@@ -322,7 +298,8 @@ def spec_singles(R,lmax,td,mf):
     ----------
     td : pyscf tddft object
     mf : pyscf scf object (for ground state)
-    '''  
+    '''
+    
     sik = np.zeros(len(td.xy))
     eik = td.e
     # matrix elements between MOs
@@ -332,12 +309,24 @@ def spec_singles(R,lmax,td,mf):
         # shape of x,y in xy matrix is (nvir,nocc), recast it to (None,nvir,nocc)
         nvir,nocc = x.shape
         nmo = nvir + nocc
-        sik[ind] = np.square(np.absolute(((x+y)[None,...].conj()*dmo[:,nocc:nmo,0:nocc]))).sum()
+        sik[ind] = np.square(np.absolute(((x+y)[None,...].conj()*dmo[:,nocc:nmo,0:nocc]))).sum();
     eik = eik[sik > np.finfo(np.float_).eps]
     sik = sik[sik > np.finfo(np.float_).eps]
     sik *= 2
     
     return sik,eik
+
+def unpack_xy(xy):
+    '''
+    take a td.xy list and unpack it into a dictionary of x and y
+    
+    Parameters
+    ----------
+    xy : list of x y matrices
+    '''
+    x = [i[0] for i in xy]
+    y = [i[1] for i in xy]
+    return {'x':x,'y':y}
 
 def polarizability(mol, mf, td, ao_dipole=None):
     '''
@@ -361,41 +350,6 @@ def polarizability(mol, mf, td, ao_dipole=None):
     sik *= 2
     return sik,eik
 
-def spec_rdm(R,lmax,trdm,e,mf):
-    '''
-    Stick spectrum from any set of transition RDMs:
-    <0|p^+ q|n>
-    <n|q^+ p|0>
-    
-    Parameters
-    ----------
-    trdm : list of transition 1 particle density matrices
-    mf : pyscf scf object (for ground state)
-    '''
-    MO = mf.mo_coeff
-    dmo = dip_mo(R,lmax,MO)[2] # 3xNxN
-    sik = np.zeros(len(trdm))
-    eik = np.zeros_like(sik)
-    for ind,t in enumerate(trdm):
-        sik[ind] = np.square(np.absolute(np.trace(t@dmo))).sum()
-        eik[ind] = e[ind] - e[0]
-    eik = eik[sik > np.finfo(np.float_).eps]
-    sik = sik[sik > np.finfo(np.float_).eps]
-    
-    return sik,eik
-
-def unpack_xy(xy):
-    '''
-    take a td.xy list and unpack it into a dictionary of x and y
-    
-    Parameters
-    ----------
-    xy : list of x y matrices
-    '''
-    x = [i[0] for i in xy]
-    y = [i[1] for i in xy]
-    return {'x':x,'y':y}
-
 def init_pis():
     # parse the input
     args = getArgs()
@@ -418,28 +372,30 @@ def init_pis():
     mol.nelectron = args.n
     # prevent pHF from crashing, i.e. force it to use provided AOs
     mol.incore_anyway = True
-    args.norb = int(mat_contents['args']['N'].item())
+    norb = int(mat_contents['args']['N'].item())
     
     # python 3 style printing
     print('PIS pyscf')
-    print('Basis set size: l = {0}, # fn\'s: {1}'.format(args.l,args.norb))
+    print('Basis set size: l = {0}, # fn\'s: {1}'.format(args.l,norb))
     print('{0} electrons'.format(args.n))
     print('{0} threads'.format(lib.num_threads()))
     print('{0} memory assigned'.format(mol.max_memory))
     
     # check if open shell or closed shell problem, based on atomic orbitals
-    if not closed_shell(args.n) or 'U' in args.T:
+    if args.n not in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232] or 'U' in args.T:
         print('Open shell system')
+        closed_shell = False
         mf = scf.UHF(mol)
     else:
         print('Closed shell system')
+        closed_shell = True
         mf = scf.RHF(mol)
     
     # set the core, overlap, and eri integrals
     mf.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
     mf.get_ovlp = lambda *args: mat_contents['ovlp']
     # get rid of extra dim when sio saves
-    mf._eri = (mat_contents['eri']/ args.d / args.r0).squeeze()
+    mf._eri = (mat_contents['eri']/ args.d / r).squeeze()
     mf.init_guess = '1e'
     
     # handle fractional e (e = number of excitations)
@@ -451,313 +407,45 @@ def init_pis():
             args.e = Nln.size*args.e
     args.e = int(args.e)
     
-    return mol,mf,args
+    return mol,mf,closed_shell,args
 
-def closed_shell(n):
-    '''
-    Electron filling order generated by ordering PIS wf\'s (n, l, index) by energy,
-    then taking the cumulative sum of 2(2l+1) (2 e- per shell + degeneracy)
-    
-    MATLAB code:
-        sphjz = besselzero(((0:lmax)+0.5)',20);
-        [l,n] = find(sphjz.^2<=sphjz(end,1).^2);
-        l = l-1;
-        e = sphjz(find(sphjz.^2<=sphjz(end,1).^2)).^2;
-        nle = sortrows([n l e],[3 2 1]);
-        filling = cumsum(2*(2*nle(:,2)+1));
-    '''
-    return n in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232]
-
-def do_ao(args,specout):
-    # AO
-    E_scale = 1/(2*args.s*np.square(args.r0))
-    n,lm,kln,Nln = pis_ao(args.l)
-    sik,eik = spec_ao(args.r0,args.l,args.n)
-    specout['E'] = {'AO':np.square(kln)*E_scale}
-    specout['C'] = {'AO':{'n':n,'lm':lm,'Nln':Nln}}
-    specout['S'] = {'AO':{'sik':sik,'eik':eik*E_scale}}
-    return specout
-
-def do_hf(mf,args,specout):
-    # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
+if __name__ == '__main__':
+    from pyscf import tddft
+    mol,mf,closed_shell,args = init_pis()
+    E_scale = args.E_scale
+    r = args.r0
     mf.kernel()
     sik,eik = spec_hf(args.r0,args.l,mf)
-    specout['E'].update({'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}})
-    specout['C'].update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
-    specout['conv'].update({'HF':mf.converged})
-    specout['S'].update({'HF':{'sik':sik,'eik':eik}})
-    return mf,specout
 
-def do_singles(mf,args,specout):
-    from pyscf import tddft
-    r = args.r0
-    lmax = args.l
-    
-    if 'H' in args.T:
-        import pis_ab_direct
-        
-    # (A/B w/ exchange) (=TDHF/RPA)
+    # RPA (A/B w/ exchange) (=TDHF)
     if 'T' in args.T:
-        if 'H' in args.T:
-            td = pis_ab_direct.direct_TDHF(mf)
-            td.converged = True
-        else:
-            td = tddft.RPA(mf) # RPA means with exchange in PySCF
-            td.nstates = args.e
-            td.max_cycle = 500
-            td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
-        specout['E'].update({'TDHF':td.e})
-        specout['C'].update({'TDHF':unpack_xy(td.xy)})
-        specout['conv'].update({'TDHF':td.converged})
-        specout['S'].update({'TDHF':{'sik':sik,'eik':eik}})
-        #td.e td.xy td.converged
+        td = tddft.RPA(mf) # RPA means with exchange in PySCF
+        td.nstates = args.e
+        td.max_cycle = 500
+        td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
     
-    # (A/- w/ exchange) (=CIS) (+TDA)
+    # RPA (A/- w/ exchange) (=CIS) (+TDA)
     if 'C' in args.T:
         td = tddft.TDA(mf)
         td.nstates = args.e
         td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
-        specout['E'].update({'CIS':td.e})
-        specout['C'].update({'CIS':unpack_xy(td.xy)})
-        specout['conv'].update({'CIS':td.converged})
-        specout['S'].update({'CIS':{'sik':sik,'eik':eik}})
+        sik,eik = spec_singles(r,args.l,td,mf)
     
     if 'R' in args.T or 'A' in args.T:
         from pyscf.tddft import rhf_slow
 
-    # (A/B w/o exchange) (direct RPA), i.e. TDH
+    # RPA (A/B w/o exchange) (RPA)
     if 'R' in args.T:
-        if 'H' in args.T:
-            td = pis_ab_direct.direct_dRPA(mf)
-            td.converged = True
-        else:
-            td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
-            td.nstates = args.e
-            td.max_cycle = 500
-            td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
-        specout['E'].update({'RPA':td.e})
-        specout['C'].update({'RPA':unpack_xy(td.xy)})
-        specout['conv'].update({'RPA':td.converged})
-        specout['S'].update({'RPA':{'sik':sik,'eik':eik}})
+        td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
+        td.nstates = args.e
+        td.max_cycle = 500
+        td.kernel()
+        sik,eik = spec_singles(r,args.l,td,mf)
     
-    # (A/- w/o exchange) (direct TDA), i.e TDH-TDA
+    # RPA (A/- w/o exchange) (+TDA)
     if 'A' in args.T:
         td = rhf_slow.dTDA(mf)
         td.nstates = args.e
         td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
-        specout['E'].update({'TDA':td.e})
-        specout['C'].update({'TDA':unpack_xy(td.xy)})
-        specout['conv'].update({'TDA':td.converged})
-        specout['S'].update({'TDA':{'sik':sik,'eik':eik}})
-    
-    return specout
-
-def do_cisd(mol,mf,args,specout):
-    from pyscf import ci,fci
-    norb = args.norb
-    nelec = mol.nelec
-    # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
-    myci = ci.CISD(mf)
-    myci.nroots = args.e
-    myci.max_cycle = 500
-    myci.kernel()
-    specout['E'].update({'CISD':myci.e_corr})
-    CISD_C = list()
-    if not closed_shell(args.n):
-        norbci = myci.get_nmo()
-    else:
-        norbci = norb
-    # get the ground state fci vec
-    if args.e > 1:
-        gsvec = myci.to_fci(myci.ci[0],norbci,nelec)
-    else:
-        gsvec = myci.to_fci(myci.ci,norbci,nelec)
-    for a in range(args.e):
-        # convert CISD to FCI vector
-        if args.e > 1:
-            esvec = myci.to_fci(myci.ci[a],norbci,nelec)
-            rdm1 = myci.make_rdm1(myci.ci[a])
-        else:
-            esvec = myci.to_fci(myci.ci,norbci,nelec)
-            rdm1 = myci.make_rdm1(myci.ci)
-        if closed_shell(args.n):
-            trdm = fci.direct_spin0.trans_rdm1(esvec,gsvec,norb,nelec)
-        else:
-            trdm = fci.direct_uhf.trans_rdm1(esvec,gsvec,norb,nelec)
-        # fci.spin_op.spin_square0(esvec,norb,nelec)
-        CISD_C.append({'rdm1':rdm1,'trdm':trdm,'smult':'blank'})
-    specout['C'].update({'CISD':CISD_C})
-    specout['conv'].update({'CISD':myci.converged})
-        
-    # cisd_slow
-    # from pyscf.ci import cisd_slow
-    # myci = cisd_slow.CISD(mf)
-    # myci.verbose = 1
-    # e,c = myci.kernel()
-    # cisd_slow.to_fci is less featured and buggy
-    # fci.spin_op.spin_square0(ci.cisd.to_fci(c[0],norb,nelec),norb,nelec)
-    # list(map(lambda x: fci.spin_op.spin_square0(ci.cisd.to_fci(x,norb,nelec),norb,nelec),c))
-    # list(map(lambda x,y: np.isclose(x,y).all(),c,myci.ci))
-    
-    return specout
-
-def do_fci(mol,mf,args,specout):
-    from pyscf import fci,ao2mo,lib
-    norb = args.norb
-    nelec = mol.nelec
-    # mol.symmetry >>> 0
-    # mol.spin >>> 0 (only for RHF)
-    # direct_spin0.FCISolver(mol) (based on flow chart)
-    if closed_shell(args.n):
-        myfci = fci.addons.fix_spin_(fci.FCI(mf, mf.mo_coeff), .5)
-    else:
-        # adapted from direct_uhf.py's example
-        from functools import reduce
-        myfci = fci.direct_uhf.FCISolver(mf)
-        nea,neb = mol.nelec
-        mo_a = mf.mo_coeff[0]
-        mo_b = mf.mo_coeff[1]
-        h1e_a = reduce(np.dot, (mo_a.T, mf.get_hcore(), mo_a))
-        h1e_b = reduce(np.dot, (mo_b.T, mf.get_hcore(), mo_b))
-        g2e_aa = ao2mo.incore.general(mf._eri, (mo_a,)*4, compact=False)
-        g2e_aa = g2e_aa.reshape(norb,norb,norb,norb)
-        g2e_ab = ao2mo.incore.general(mf._eri, (mo_a,mo_a,mo_b,mo_b), compact=False)
-        g2e_ab = g2e_ab.reshape(norb,norb,norb,norb)
-        g2e_bb = ao2mo.incore.general(mf._eri, (mo_b,)*4, compact=False)
-        g2e_bb = g2e_bb.reshape(norb,norb,norb,norb)
-        h1e = (h1e_a, h1e_b)
-        eri = (g2e_aa, g2e_ab, g2e_bb)
-        na = fci.cistring.num_strings(norb, nea)
-        nb = fci.cistring.num_strings(norb, neb)
-    myfci.nroots = args.e
-    myfci.conv_tol = 1e-7
-    myfci.max_cycle = 1000
-    myfci.threads = lib.num_threads()
-    if closed_shell(args.n):
-        myfci.kernel()
-    else:
-        myfci.eci,myfci.ci = myfci.kernel(h1e, eri, norb, nelec)
-    # myci.eci is E_HF + E_corr, not just E_corr
-    specout['E'].update({'FCI':myfci.eci})
-    FCI_C = list()
-    for a in range(args.e):
-        if args.e > 1:
-            trdm = myfci.trans_rdm1(myfci.ci[a],myfci.ci[0],norb,nelec)
-            rdm1 = myfci.make_rdm1(myfci.ci[a],norb,nelec)
-            # fci.direct_spin0.make_rdm1(myfci.ci[a],norb,nelec)
-            smult = fci.spin_op.spin_square0(myfci.ci[a],norb,nelec)
-        else:
-            trdm = myfci.trans_rdm1(myfci.ci,myfci.ci,norb,nelec)
-            rdm1 = myfci.make_rdm1(myfci.ci,norb,nelec)
-            smult = fci.spin_op.spin_square0(myfci.ci,norb,nelec)
-        FCI_C.append({'trdm':trdm,'rdm1':rdm1,'smult':smult})
-    specout['C'].update({'FCI':FCI_C})
-    specout['conv'].update({'FCI':myfci.converged})
-    
-    return specout
-
-def do_ccsd(mf,args,specout):
-    '''
-    CCSD + EOM-EE-CCSD + GF 
-    Returns: spectra, RDM / excited state RDM, correlation energies
-    '''
-    from pyscf.cc import cc,gf
-    if closed_shell(args.n):
-        mycc = cc.RCCSD(mf)
-    else:
-        mycc = cc.UCCSD(mf)
-    # Do the ground state CCSD calculation
-    mycc.conv_tol = 1e-7
-    mycc.kernel()
-    mycc.solve_lambda()
-    nocc, nvir = mycc.t1.shape
-    ntot = nocc+nvir
-    
-    CCSD_C = list()
-    # Calculate the diagonal of the RDM for ground state      
-    rdm = np.zeros(ntot)
-    for i in range(ntot):
-        rdm[i] = gf.rdm(mycc,i,i)
-    CCSD_C.append({'rdm':rdm})
-    	
-    # Calculate and biorthonormalise the right and left eigenvectors
-    e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
-    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(args.e, left = True)
-    r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
-    
-    # Calculate the diagonal of the RDM for each excited state     
-    tot = np.zeros((ntot,args.e))
-    for i in range(ntot):
-        tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
-    CCSD_C.append({'erdm':tot})
-    
-    specout['E'].update({'CCSD':mycc.e_corr})
-    specout['C'].update({'CCSD':CCSD_C}) # placeholder for RDM
-    specout['conv'].update({'CCSD':mycc.converged})
-    
-    #----------SPECTRUM DETAILS --------------
-    gf1 = gf.OneParticleGF()
-    dw = 0.001
-    wmin = 0.0
-    wmax = 0.01
-    nw = int((wmax-wmin)/dw) + 1
-    omegas = np.linspace(wmin, wmax, nw)
-    eta = 0.000125
-    gf1.gmres_tol = 1e-5
-    
-    dpq = dip_mo(r,args.l,mf.mo_coeff)[2]   
-    dpq = dpq.reshape(ntot,ntot,3)
-    
-    #----------EE SPECTRUM SECTION --------------
-    EEgf = gf1.solve_2pgf(mycc,range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dpq)
-    spectrum = np.zeros((len(omegas)))
-    for p in range(ntot):
-        for r in range(ntot):
-            if (all(dpq[p,r,:] == 0)): continue
-            for q in range(ntot):
-                for s in range(ntot):
-                    spectrum -= np.imag(EEgf[p,q,r,s,:])
-    spectrum /= np.pi
-        
-    with open("EEspectrum_l"+str(args.l)+"_r"+str(int(r))+".txt", "w") as f:
-        for i,s in enumerate(spectrum):
-            f.write(str(wmin+dw*i) + "    " + str(s) + "\n")
-    
-    return specout
-
-if __name__ == '__main__':
-    # start the calculation
-    mol,mf,args = init_pis()
-    # output dictionary
-    specout = {'E':dict(),'C':dict(),'S':dict(),'conv':dict(),'args':args}
-    
-    # AO
-    specout = do_ao(args,specout)
-    
-    # HF
-    mf,specout = do_hf(mf,args,specout)
-
-    # All flavours of singles spectroscopy
-    specout = do_singles(mf,args,specout)
-    
-    # CISD
-    # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
-    if 'D' in args.T:
-        specout = do_cisd(mol,mf,args,specout)
-
-    # FCI
-    if 'F' in args.T:
-        specout = do_fci(mol,mf,args,specout)
-         
-    # (R/U)CCSD + EOM-EE + GF spectrum
-    if 'E' in args.T:
-        specout = do_ccsd()
-    
-    # save results ------------------------------------------------------------
-    if args.j != 0:
-        output_path = os.path.normpath('../output_SCF/' + args.j)
-        sio.savemat(output_path,specout,oned_as='column')
+        sik,eik = spec_singles(r,args.l,td,mf)

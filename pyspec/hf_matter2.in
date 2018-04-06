@@ -1,6 +1,5 @@
-# HF/singles
--e 0 -n 8 -r 1 -T RATC -s 0.25 -l 8
--e 0 -n 8 -r 2 -T RATC -s 0.25 -l 8
--e 0 -n 8 -r 4 -T RATC -s 0.25 -l 8
--e 0 -n 8 -r 6 -T RATC -s 0.25 -l 8
--e 0 -n 8 -r 8 -T RATC -s 0.25 -l 8
+-e 0 -n 18 -r 1 -T HRATC -s 0.25 -l 8
+-e 0 -n 18 -r 2 -T HRATC -s 0.25 -l 8
+-e 0 -n 18 -r 4 -T HRATC -s 0.25 -l 8
+-e 0 -n 18 -r 6 -T HRATC -s 0.25 -l 8
+-e 0 -n 18 -r 8 -T HRATC -s 0.25 -l 8
