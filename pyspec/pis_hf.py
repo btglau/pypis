@@ -13,8 +13,10 @@ Created on Mon Sep 25 15:13:24 2017
 import os, glob, argparse
 import numpy as np
 import scipy.io as sio
-import scipy.constants as sc
-from scipy import special, integrate
+from scipy import constants
+from scipy.integrate import quad
+from scipy.special import spherical_jn
+from scipy.linalg import block_diag
 
 '''
 upon execution, this program should look up a directory, then into a folder
@@ -41,10 +43,10 @@ Note you will see warning message on the screen:
 def getArgs():
     # get args from command line sys.argv[1:]
     parser = argparse.ArgumentParser(description="Do a pyscf calculation on a basis set")
-    parser.add_argument('-l',type=int,help="basis set size to use",default=4)
+    parser.add_argument('-l',help="basis set size to use (or comma separated of n)",default=[4])
     parser.add_argument('-C',type=int,help="basis set size for CB",default=0)
     parser.add_argument('-V',type=int,help="basis set size for VB",default=0)
-    parser.add_argument('-n',type=int,help="number of electrons",default=1)
+    parser.add_argument('-n',type=int,help="number of electrons",default=2)
     parser.add_argument('-d',type=float,help="dielectric constant",default=1)
     parser.add_argument('-e',type=float,help='''number of excitations (1 = ground state only, 
                                                                      0 = as many as the basis set size,
@@ -56,56 +58,71 @@ def getArgs():
     parser.add_argument('-T',
                         help='''
                         levels of theory to use: give an unordered string with options 
-                        needed (HF always done):
+                        needed:
+                            - A(O),
+                            - HF (M)ean field,
                             - (U)HF,
                             - (R)PA (A/B w/o ex),
                             - TD(A) (A/- w/o ex),
                             - (T)DHF (A/B w/ ex),
-                            - (C)IS (A/- w/o ex),
+                            - (C)IS (A/- w/ ex),
                             --(H) diagonalizes full H for (T)DHF and (R)PA,
                             - CIS(D),
                             - (F)CI,
                             - (E)OM-CCSD')
                         '''
                         ,default='')
-    return parser.parse_args()
-
-def change_basis_2el_complex(g,C):
-    """Change basis for 2-el integrals with complex coefficients and return.
-
-    - C is a matrix (Ns x Nnew) whose columns are new basis vectors,
-      expressed in the basis in which g is given. C is the transformation matrix.
-    - Typical operation is g in the site basis, and C is a 
-      transformation from site to some-other-basis.
-    """
-    g1 = np.tensordot(C,g,axes=[0,3])
-    g1 = np.transpose(g1,(1,2,3,0))
-    # g1 is Ns x Ns x Ns x Nnew
-    g = np.tensordot(C,g1,axes=[0,2])
-    g = np.transpose(g,(1,2,0,3))
-    # g is Ns x Ns x Nnew x Nnew
-    g1 = np.tensordot(C.conj(),g,axes=[0,1])
-    g1 = np.transpose(g1,(1,0,2,3))
-    # g1 is Ns x Nnew x Nnew x Nnew
-    g = np.tensordot(C.conj(),g1,axes=[0,0])
-    # g is Nnew x Nnew x Nnew x Nnew
-    return g
+    parser.add_argument('-R',help='Energy range "start,stop,steps" in eV if -T E',default='')
+    args = parser.parse_args()
+    
+    # convert lmax to an array [n of l=0,n of l=1,...] or just lmax = args.l
+    args.l = np.asarray(args.l.split(',')).astype(np.int)
+    if args.l.size == 1:
+        args.l = args.l[0]
+    
+    # handle fractional e (e = number of excitations)
+    Nnl = pis_ao(args.l)[-1]
+    if args.e < 1:
+        norb = Nnl.size
+        nvir = norb - args.n/2
+        nocc = args.n/2
+        num_es = nocc*nvir
+        if args.e <= 0:
+            args.e = num_es
+        else:
+            args.e = num_es*args.e
+    args.e = int(args.e)
+    
+    # work up energy range input for (E)OM-CCSD
+    if 'E' in args.T:
+        args.ccsd_range = np.asarray(args.R.split(',')).astype(np.float)
+        
+    # nm -> a0
+    args.r0 = args.r*1E-9/constants.physical_constants['Bohr radius'][0]
+    
+    return args
 
 def pis_ao(lmax):
     '''
     return a sequence of numbers that define the PIS basis set for a given lmax
     '''
-    assert lmax < 55, 'lmax > 55 means that not all states lower than (n=1),lmax will be returned'
-    
-    # rows are l, cols are n
     sphjz = np.loadtxt('sphjz_l54_n20.txt',delimiter=',')
-    ln = np.transpose(np.nonzero(sphjz**2 <= sphjz[lmax,0]**2))
-    ln = ln.astype(np.int_)
-    # sort by n first, then l
+    if np.isscalar(lmax):
+        assert lmax < 55, 'lmax > 55 means that not all states lower than (n=1),lmax will be returned'
+        # rows are l, cols are n
+        ln = np.transpose(np.nonzero(sphjz**2 <= sphjz[lmax,0]**2))
+        ln = ln.astype(np.int_)
+    else:
+        ln = np.zeros((lmax.sum(),2),dtype=np.int)
+        ln[:,0] = np.repeat(np.r_[0:lmax.size],lmax)
+        for l,n in enumerate(lmax):
+            ln[ln[:,0]==l,1] = np.r_[0:n]
+    
+    # sort by l first, then n
     ln = ln[np.lexsort((ln[:,1],ln[:,0]))]
     # m_l degeneracy
     aosz = (2*ln[:,0]+1).sum()
-    nlm = np.zeros((aosz,3),dtype=np.int_)
+    nlm = np.zeros((aosz,3),dtype=np.int)
     nlm[:,1] = np.repeat(ln[:,0],2*ln[:,0]+1) # l
     # repeat n taking into account m_l degeneracy, and insert m_l
     um = np.unique(2*ln[:,0]+1,return_counts=True)
@@ -118,15 +135,16 @@ def pis_ao(lmax):
         nlm[ind[ix]:x,0] = np.tile(ln[2*ln[:,0]+1==um[0][ix],1],um[0][ix])
         nlm[ind[ix]:x,2] = np.repeat(np.r_[-ul[0][ix]:ul[0][ix]+1],ul[1][ix])
     # jn zeros
-    kln = sphjz[nlm[:,1],nlm[:,0]]
+    knl = sphjz[nlm[:,1],nlm[:,0]]
     # energy (unitless)
-    # eln = kln**2
+    # eln = knl**2
     # normalization contants
-    Nln = np.sqrt(2) / np.absolute(special.spherical_jn(nlm[:,1]+1,kln))
+    Nnl = np.sqrt(2) / np.absolute(spherical_jn(nlm[:,1]+1,knl))
     # from index n to quantum n
     nlm[:,0] += 1
     
-    return nlm[:,0],nlm[:,1:],kln,Nln
+    # n [l m] knl Nnl
+    return nlm[:,0],nlm[:,1:],knl,Nnl
 
 def dip_mo(R,lmax,MO=None):
     '''
@@ -135,8 +153,8 @@ def dip_mo(R,lmax,MO=None):
     
     MO - pyscf mo_coeff ndarray - NxN with each column coefficients of MOs
     '''
-    lm,kln,Nln = pis_ao(lmax)[1:]
-    dsz = kln.size
+    lm,knl,Nnl = pis_ao(lmax)[1:]
+    dsz = knl.size
     
     # preallocate
     dpq = np.zeros((3,dsz,dsz))
@@ -145,7 +163,11 @@ def dip_mo(R,lmax,MO=None):
     # AO dipole matrix elements
     for i in range(dsz):
         for j in range(dsz):
-            dpq[:,i,j] = dip_ao(R,lm[[i,j],0],lm[[i,j],1],kln[[i,j]],Nln[[i,j]])
+            dpq[:,i,j] = dip_ao(R,lm[[i,j],0],lm[[i,j],1],knl[[i,j]],Nnl[[i,j]])
+    
+    # transform from complex to real
+    U = Ulmax(lmax) # <u|m>
+    dpq = U @ dpq @ U.conj().T # U^+ D U 
     
     # cartesian
     dcart[2,...] = dpq[0,...] # z
@@ -158,17 +180,15 @@ def dip_mo(R,lmax,MO=None):
         dmo = np.zeros_like(dcart)
         for i in range(dsz):
             for j in range(dsz):
-                #dmo[i,j,:] = (np.outer(MO[:,i],MO[:,j])[...,None]*dcart).sum(axis=(0,1))
-                # more compact & faster (matmul @) way
+                # matmal (@) treats n-d array as slices of matrices in the last
+                # two indices
                 dmo[:,i,j] = MO[:,i].conj().T@dcart@MO[:,j]
-        # possible einsum: ab,rbd,cd->rac
-        #dmo = np.einsum('ab,rbd,cd->rac',MO.conj(),dcart,MO)
     else:
         dmo = np.zeros(1)
     
     return dpq,dcart,dmo
 
-def dip_ao(R,l,m,kln,Nln):
+def dip_ao(R,l,m,knl,Nnl):
     '''
     calculate the dipole matrix element between two PIS wavefunctions, with a
     radial bessel function part, and spherical harmonic angular part
@@ -188,15 +208,15 @@ def dip_ao(R,l,m,kln,Nln):
         dip[1] *= cgc(l[0],l[1],Ym[1],m[0],m[1])
         dip[2] *= cgc(l[0],l[1],Ym[2],m[0],m[1])
         # radial (discard the error estimate)
-        dip *= R*integrate.quad(RR,0,1,args=(Nln,kln,l))[0]
+        dip *= R*quad(RR,0,1,args=(Nnl,knl,l))[0]
         
     return dip
 
-def RR(r,Nln,kln,l):
+def RR(r,Nnl,knl,l):
     '''kernel of radial integral of two bessel functions'''
-    return Nln[0]*Nln[1]*np.power(r,3)*\
-            special.spherical_jn(l[0],kln[0]*r)*\
-            special.spherical_jn(l[1],kln[1]*r) 
+    return Nnl[0]*Nnl[1]*np.power(r,3)*\
+            spherical_jn(l[0],knl[0]*r)*\
+            spherical_jn(l[1],knl[1]*r) 
 
 def cgc(ll,lr,Ym,ml,mr):
     '''
@@ -223,22 +243,57 @@ def cgc(ll,lr,Ym,ml,mr):
     
     return c
 
+def Ulmax(lmax):
+    '''
+    Return a transformation matrix that follows the AO list given by pis_ao.
+    Different from Ulmu that assumes l is the same for a given u and m.
+    '''
+    n,lm = pis_ao(lmax)[0:2]
+    nl,ind = np.unique(np.c_[n,lm[:,0]],return_index=True,axis=0)
+    nl = nl[np.argsort(ind)]
+    U_new = list()
+    for a in range(0,lmax+1):
+        b = np.nonzero(nl[:,1]==a)
+        step = b[0].size
+        Us_size = step*(2*a+1)
+        Us = np.zeros((Us_size,Us_size),dtype='complex_')
+        for c in range(0,step):
+            # nest the tranfsormation matrices for a given l in the same pattern
+            # as given by pis_ao
+            Us[c::step,c::step] = Ulmu(np.arange(-a,a+1)[:,None],np.arange(-a,a+1)[None,:])
+        U_new.append(Us)
+    U = block_diag(*U_new)
+    return U
+
+def Ulmu(u,m):
+    '''
+    Transformation matrix for complex to real spherical harmonics, <u|m>
+    Always returns positive real spherical harmonics
+    '''
+    u = u.astype('float_')
+    m = m.astype('float_')
+    U = (m==0)*(u==0) + ((u>0)*np.power(-1,m)*(m==u) \
+                         + 1j*(-u>0)*(m==u) \
+                         - 1j*(-u>0)*np.power(-1,m)*(m==-u) \
+                         + (u>0)*(m==-u))/np.sqrt(2)
+    
+    return U
+
 def sd(bra,ket,h1,MO):
     '''
     One electron operator matrix element between two slater determinants
     <SD1|h(1)|SD2>
     
-    To make use of matmul, please make sure that the h1 operator has the last
-    two indices corresponding to the atomic orbital matrix elements
+    To make use of np/matmul, please make sure that the h1 operator has the last
+    two indices corresponding to the atomic orbital matrix elements, while other
+    indices to the left can be coordinates, etc.
     '''
     orb_diff = bra-ket
     if np.count_nonzero(orb_diff) == 2:
-        #matelem = (np.outer(MO[:,orb_diff<0].conj(),MO[:,orb_diff>0])*h1).sum(axis=(0,1))
         matelem = MO[:,orb_diff>0].conj().T@h1@MO[:,orb_diff<0]
     elif np.count_nonzero(orb_diff) == 0:
         matelem = np.zeros(h1.shape[0])
         for i in np.nditer(bra.nonzero()[0]):
-            #matelem += bra[i]*(np.outer(MO[:,i].conj(),MO[:,i])*h1).sum(axis=(0,1))
             matelem += MO[:,i].conj().T@h1@MO[:,i]
         # closed shell
         matelem *= 2
@@ -259,25 +314,28 @@ def spec_ao(R,lmax,n):
     Returns
     -------
     out : Arrays of stick spectrum energies and strengths
+    
+    |Y> = \sum c_i|AO>, where c_i = 0, 1, or 2
     '''
     
-    lm,kln = pis_ao(lmax)[1:3]
-    kln = np.square(kln) # energy
-    ind = np.lexsort((lm[:,1],kln))
+    lm,knl = pis_ao(lmax)[1:3]
+    knl = np.square(knl) # energy
+    ind = np.lexsort((lm[:,1],knl))
     # ao occupation 
-    ao_occ = np.zeros(kln.size)
+    ao_occ = np.zeros(knl.size)
     # doubly occupied
     docc = np.floor(n/2).astype(np.int_)
     ao_occ[ind[0:docc]] = 2
     # singly occupied
     if n & 0x1:
         ao_occ[ind[docc]] = 1
+    dcart = dip_mo(R,lmax)[1]
     
-    dcart = np.square(np.absolute(dip_mo(R,lmax)[1])).sum(axis=0)
-    # S_{ik}, E_{ik}
     sik = dcart*ao_occ[:,None] # transitions
     sik = sik*(ao_occ[None,:] == 0) # cannot transition to filled orbitals
-    eik = kln[None,:] - kln[:,None]
+    # S_{ik}, E_{ik}
+    sik = np.square(np.absolute(sik)).sum(axis=0)
+    eik = knl[None,:] - knl[:,None]
     eik = eik[sik.nonzero()]
     sik = sik[sik.nonzero()]
     
@@ -298,23 +356,26 @@ def spec_hf(R,lmax,mf):
     sik = np.zeros((nocc,nvir))
     eik = np.zeros_like(sik)
     # matrix elements between MOs
-    dmo = np.square(np.absolute(dip_mo(R,lmax,mf.mo_coeff)[2])).sum(axis=0)
+    if hasattr(mf,'dmo'):
+        dmo = mf.dmo
+    else:
+        dmo = dip_mo(R,lmax,mf.mo_coeff)[2]
     
     for o in range(nocc):
         for v in range(nvir):
-            # because <Y_o^v|h1|Y_0> = <v|h1|o>
-            # columns are ket, but sik and eik will be flattened anyways
-            sik[o,v] = dmo[v+nocc,o]
+            # <Y_o^v|h1|Y_0> = <v|h1|o>
+            # <Y_0|h1|Y_o^v> = <o|h1|v>
+            # factor of 2 for a->a and b->b spins
+            # Szabo 2.3.5
+            sik[o,v] = np.square(np.absolute(2*dmo[:,o,v+nocc])).sum(axis=0)
+            #sik[o,v] = (4*dmo[:,o,v+nocc]*dmo[:,v+nocc,o]).sum(axis=0)
             eik[o,v] = mf.mo_energy[v+nocc] - mf.mo_energy[o]
-    # factor of 2 for a->a and b->b spins
-    # Szabo 2.3.5
-    sik *= 2
     eik = eik[sik.nonzero()]
     sik = sik[sik.nonzero()]
     
     return sik.ravel(),eik.ravel()
 
-def spec_singles(R,lmax,td,mf):
+def spec_singles(R,lmax,mf,td):
     '''
     Singles excitation based on a xy matrix, from a tddft pyscf object
     
@@ -326,27 +387,37 @@ def spec_singles(R,lmax,td,mf):
     sik = np.zeros(len(td.xy))
     eik = td.e
     # matrix elements between MOs
-    MO = mf.mo_coeff
-    dmo = dip_mo(R,lmax,MO)[2] # 3xNxN
+    if hasattr(mf,'dmo'):
+        dmo = mf.dmo
+    else:
+        dmo = dip_mo(R,lmax,mf.mo_coeff)[2]
+        
     for ind,(x,y) in enumerate(td.xy):
         # shape of x,y in xy matrix is (nvir,nocc), recast it to (None,nvir,nocc)
         nvir,nocc = x.shape
         nmo = nvir + nocc
-        sik[ind] = np.square(np.absolute(((x+y)[None,...].conj()*dmo[:,nocc:nmo,0:nocc]))).sum()
-    eik = eik[sik > np.finfo(np.float_).eps]
-    sik = sik[sik > np.finfo(np.float_).eps]
+        sik[ind] =  np.square(np.absolute(((x+y).T[None,...]*dmo[:,0:nocc,nocc:nmo]).sum(axis=(1,2)))).sum()
+        
+    # prune td.xy and td.e to return only non-zero vectors
+    ind = sik > np.finfo(np.float_).eps
+    td.xy = [td.xy[c] for c in range(len(td.xy)) if ind[c]]
+    td.e = [td.e[c] for c in range(len(td.xy)) if ind[c]]
+    eik = eik[ind]
+    sik = sik[ind]
     sik *= 2
     
     return sik,eik
 
-def polarizability(mol, mf, td, ao_dipole=None):
+def polarizability_stick(args,mol,mf,td):
     '''
     A/B X/Y stick spectrum
     Adapted from Berkelbach 2018
     '''
-    mol.set_common_orig((0.0,0.0,0.0))
-    if ao_dipole is None:
-        ao_dipole = mol.intor_symmetric('int1e_r', comp=3) 
+    if hasattr(mf,'dmo'):
+        ao_dipole = mf.dcart
+    else:
+        ao_dipole = dip_mo(args.r0,args.l,mf.mo_coeff)[1]
+        
     occidx = np.where(mf.mo_occ==2)[0] 
     viridx = np.where(mf.mo_occ==0)[0] 
     mo_coeff = mf.mo_coeff 
@@ -356,33 +427,77 @@ def polarizability(mol, mf, td, ao_dipole=None):
     eik = td.e
     for ind,(x,y) in enumerate(td.xy):
         sik[ind] = np.square(np.absolute(np.einsum('xai,ai->x',virocc_dip, (x+y)))).sum()
-    eik = eik[sik.nonzero()]
-    sik = sik[sik.nonzero()]
+    # only nonzero
+    ind = sik > np.finfo(np.float_).eps
+    eik = eik[ind]
+    sik = sik[ind]
     sik *= 2
+    
     return sik,eik
+
+def polarizability(args,mol,mf,td): 
+    '''
+    absorption spectrum, Tim's way
+    '''
+    Ha = constants.physical_constants['Hartree energy in eV'][0]
+    ws = args.ccsd_range
+    # convert eV -> Ha
+    ws[0:2] /= Ha
+    omegas = np.linspace(ws[0],ws[1],num=ws[2].astype(np.int))+1j*broaden(args.r)/Ha    
+    MO = mf.mo_coeff
+    if hasattr(mf,'dmo'):
+        ao_dipole = mf.dcart
+    else:
+        ao_dipole = dip_mo(args.r0,args.l,MO)[2] # 3xNxN
+        
+    occidx = np.where(mf.mo_occ==2)[0] 
+    viridx = np.where(mf.mo_occ==0)[0] 
+    mo_coeff = mf.mo_coeff 
+    orbv,orbo = mo_coeff[:,viridx], mo_coeff[:,occidx] 
+    virocc_dip = np.einsum('xaq,qi->xai', np.einsum('pa,xpq->xaq', orbv, ao_dipole), orbo) 
+    p = np.zeros((omegas.size,3), dtype=np.complex128) 
+    for (x,y),e in zip(td.xy, td.e): 
+        dip = np.einsum('xai,ai->x',virocc_dip, np.sqrt(2.0)*(x+y))
+        for iw,w in enumerate(omegas): 
+            p[iw] += dip**2*((1.0/(w-e))-(1.0/(w+e))) 
+            
+    return p,omegas.real
 
 def spec_rdm(R,lmax,trdm,e,mf):
     '''
     Stick spectrum from any set of transition RDMs:
-    <0|p^+ q|n>
-    <n|q^+ p|0>
+    <0|p^+ q|n> = y_qp
+    S_ge = Tr(ry)Tr(r*y*)
     
     Parameters
     ----------
     trdm : list of transition 1 particle density matrices
     mf : pyscf scf object (for ground state)
     '''
-    MO = mf.mo_coeff
-    dmo = dip_mo(R,lmax,MO)[2] # 3xNxN
+    if hasattr(mf,'dmo'):
+        dmo = mf.dmo
+    else:
+        dmo = dip_mo(R,lmax,mf.mo_coeff)[2]
     sik = np.zeros(len(trdm))
     eik = np.zeros_like(sik)
     for ind,t in enumerate(trdm):
-        sik[ind] = np.square(np.absolute(np.trace(t@dmo))).sum()
+        #sik[ind] = np.square(np.absolute(np.trace(dmo@t,axis1=1,axis2=2))).sum()
+        sik[ind] = (np.trace(dmo.conj()@t.conj(),axis1=1,axis2=2)*np.trace(dmo@t,axis1=1,axis2=2)).sum()
         eik[ind] = e[ind] - e[0]
+    # matrix element for <gs|r|gs> can be nonzero, if gs is not a pure angular
+    # momentum state. zero out any entries where eik == 0
+    ind = np.logical_or(sik > np.finfo(np.float_).eps,eik==0)
     eik = eik[sik > np.finfo(np.float_).eps]
     sik = sik[sik > np.finfo(np.float_).eps]
     
     return sik,eik
+
+def broaden(r):
+    '''
+    broadening curve fit to Alan's parameters
+    takes r in nm, returns in eV
+    '''
+    return 0.05487*np.power(r,-1.08)
 
 def unpack_xy(xy):
     '''
@@ -397,16 +512,15 @@ def unpack_xy(xy):
     return {'x':x,'y':y}
 
 def init_pis():
-    # parse the input
-    args = getArgs()
     from pyscf import gto, scf, lib
     
-    a0 = sc.physical_constants['Bohr radius'][0]
-    args.r0 = args.r*1E-9/a0 # nm -> a0
+    # parse the input
+    args = getArgs()
     E_scale = 1/(2*args.s*np.square(args.r0))
     
     # load the mat file
-    l_path = os.path.normpath('../basissets/' + '*l{}*.mat'.format(args.l))
+    l_path = os.path.normpath('../basissets_8fold/' + '*l{}*.mat'.format(args.l))
+    #l_path = os.path.normpath('../basissets/' + '*l{}*.mat'.format(args.l))
     basisset_path = glob.glob(l_path)[0]
     mat_contents = sio.loadmat(basisset_path,matlab_compatible=True)
 
@@ -442,15 +556,6 @@ def init_pis():
     mf._eri = (mat_contents['eri']/ args.d / args.r0).squeeze()
     mf.init_guess = '1e'
     
-    # handle fractional e (e = number of excitations)
-    Nln = pis_ao(args.l)[-1]
-    if args.e < 1:
-        if args.e <= 0:
-            args.e = Nln.size
-        else:
-            args.e = Nln.size*args.e
-    args.e = int(args.e)
-    
     return mol,mf,args
 
 def closed_shell(n):
@@ -463,41 +568,54 @@ def closed_shell(n):
         [l,n] = find(sphjz.^2<=sphjz(end,1).^2);
         l = l-1;
         e = sphjz(find(sphjz.^2<=sphjz(end,1).^2)).^2;
-        nle = sortrows([n l e],[3 2 1]);
+        [nle,ind] = sortrows([n l e],[3 2 1]);
         filling = cumsum(2*(2*nle(:,2)+1));
+        
+    [1s 1p 1d 2s 1f 2p 1g 2d ...]
     '''
-    return n in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232]
+    #return n in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232]
+    return True
+    
 
 def do_ao(args,specout):
     # AO
     E_scale = 1/(2*args.s*np.square(args.r0))
-    n,lm,kln,Nln = pis_ao(args.l)
+    n,lm,knl,Nnl = pis_ao(args.l)
     sik,eik = spec_ao(args.r0,args.l,args.n)
-    specout['E'] = {'AO':np.square(kln)*E_scale}
-    specout['C'] = {'AO':{'n':n,'lm':lm,'Nln':Nln}}
+    specout['E'] = {'AO':np.square(knl)*E_scale}
+    specout['C'] = {'AO':{'n':n,'lm':lm,'Nnl':Nnl}}
     specout['S'] = {'AO':{'sik':sik,'eik':eik*E_scale}}
     return specout
 
 def do_hf(mf,args,specout):
     # HF: returns converged, e_tot, mo_energy, mo_coeff, mo_occ
     mf.kernel()
-    sik,eik = spec_hf(args.r0,args.l,mf)
-    specout['E'].update({'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}})
-    specout['C'].update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
-    specout['conv'].update({'HF':mf.converged})
-    specout['S'].update({'HF':{'sik':sik,'eik':eik}})
-    return mf,specout
+    # attach d_pq to mf object so recalculation in post-HF is not neccessary
+    mf.dcart,mf.dmo = dip_mo(args.r0,args.l,MO=mf.mo_coeff)[1:]
+    if 'M' in args.T:
+        specout['E'].update({'HF':{'e_tot':mf.e_tot,'mo_energy':mf.mo_energy}})
+        specout['C'].update({'HF':{'mo_coeff':mf.mo_coeff,'mo_occ':mf.mo_occ}})
+        specout['conv'].update({'HF':mf.converged})
+        sik,eik = spec_hf(args.r0,args.l,mf)
+        specout['S'].update({'HF':{'sik':sik,'eik':eik}})
+        
+    return specout,mf
 
 def do_singles(mf,args,specout):
     from pyscf import tddft
     r = args.r0
     lmax = args.l
     
+    '''
+    sik,eik = polarizability(args,mol,mf,td,ao_dipole=None)
+    '''
+    
     if 'H' in args.T:
         import pis_ab_direct
         
     # (A/B w/ exchange) (=TDHF/RPA)
     if 'T' in args.T:
+        td = None
         if 'H' in args.T:
             td = pis_ab_direct.direct_TDHF(mf)
             td.converged = True
@@ -506,7 +624,7 @@ def do_singles(mf,args,specout):
             td.nstates = args.e
             td.max_cycle = 500
             td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
+        sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'TDHF':td.e})
         specout['C'].update({'TDHF':unpack_xy(td.xy)})
         specout['conv'].update({'TDHF':td.converged})
@@ -515,10 +633,11 @@ def do_singles(mf,args,specout):
     
     # (A/- w/ exchange) (=CIS) (+TDA)
     if 'C' in args.T:
+        td = None
         td = tddft.TDA(mf)
         td.nstates = args.e
         td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
+        sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'CIS':td.e})
         specout['C'].update({'CIS':unpack_xy(td.xy)})
         specout['conv'].update({'CIS':td.converged})
@@ -529,6 +648,7 @@ def do_singles(mf,args,specout):
 
     # (A/B w/o exchange) (direct RPA), i.e. TDH
     if 'R' in args.T:
+        td = None
         if 'H' in args.T:
             td = pis_ab_direct.direct_dRPA(mf)
             td.converged = True
@@ -537,7 +657,7 @@ def do_singles(mf,args,specout):
             td.nstates = args.e
             td.max_cycle = 500
             td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
+        sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'RPA':td.e})
         specout['C'].update({'RPA':unpack_xy(td.xy)})
         specout['conv'].update({'RPA':td.converged})
@@ -545,10 +665,11 @@ def do_singles(mf,args,specout):
     
     # (A/- w/o exchange) (direct TDA), i.e TDH-TDA
     if 'A' in args.T:
+        td = None
         td = rhf_slow.dTDA(mf)
         td.nstates = args.e
         td.kernel()
-        sik,eik = spec_singles(r,lmax,td,mf)
+        sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'TDA':td.e})
         specout['C'].update({'TDA':unpack_xy(td.xy)})
         specout['conv'].update({'TDA':td.converged})
@@ -558,14 +679,27 @@ def do_singles(mf,args,specout):
 
 def do_cisd(mol,mf,args,specout):
     from pyscf import ci,fci
+
     norb = args.norb
     nelec = mol.nelec
-    # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)
     myci = ci.CISD(mf)
     myci.nroots = args.e
     myci.max_cycle = 500
-    myci.kernel()
-    specout['E'].update({'CISD':myci.e_corr})
+    
+    nmo = mf.mo_coeff.shape[1]
+    nocc = np.count_nonzero(mf.mo_occ)
+    nvir = nmo - nocc 
+    ci_init = []
+    c0 = 0
+    c2 = np.zeros((nocc,nocc,nvir,nvir))
+    for i in range(myci.nroots):
+        c1 = np.zeros(nocc*nvir)
+        c1[i] = 1
+        c1 = c1.reshape(nocc,nvir)
+        ci_init.append(myci.amplitudes_to_cisdvec(c0, c1, c2))
+    
+    myci.kernel(ci0=ci_init)
+    
     CISD_C = list()
     if not closed_shell(args.n):
         norbci = myci.get_nmo()
@@ -585,14 +719,18 @@ def do_cisd(mol,mf,args,specout):
             esvec = myci.to_fci(myci.ci,norbci,nelec)
             rdm1 = myci.make_rdm1(myci.ci)
         if closed_shell(args.n):
-            trdm = fci.direct_spin0.trans_rdm1(esvec,gsvec,norb,nelec)
+            trdm = fci.direct_spin0.trans_rdm1(gsvec,esvec,norb,nelec)
         else:
-            trdm = fci.direct_uhf.trans_rdm1(esvec,gsvec,norb,nelec)
+            trdm = fci.direct_uhf.trans_rdm1(gsvec,esvec,norb,nelec)
         # fci.spin_op.spin_square0(esvec,norb,nelec)
         CISD_C.append({'rdm1':rdm1,'trdm':trdm,'smult':'blank'})
+    # E = E_HF + E_corr
+    specout['E'].update({'CISD':myci.e_corr})
     specout['C'].update({'CISD':CISD_C})
     specout['conv'].update({'CISD':myci.converged})
-        
+    sik,eik = spec_rdm(args.r0,args.l,[x['trdm'] for x in CISD_C],mf.e_tot + myci.e_corr,mf)
+    specout['S'].update({'CISD':{'sik':sik,'eik':eik}})
+    
     # cisd_slow
     # from pyscf.ci import cisd_slow
     # myci = cisd_slow.CISD(mf)
@@ -631,8 +769,8 @@ def do_fci(mol,mf,args,specout):
         g2e_bb = g2e_bb.reshape(norb,norb,norb,norb)
         h1e = (h1e_a, h1e_b)
         eri = (g2e_aa, g2e_ab, g2e_bb)
-        na = fci.cistring.num_strings(norb, nea)
-        nb = fci.cistring.num_strings(norb, neb)
+        #na = fci.cistring.num_strings(norb, nea)
+        #nb = fci.cistring.num_strings(norb, neb)
     myfci.nroots = args.e
     myfci.conv_tol = 1e-7
     myfci.max_cycle = 1000
@@ -641,37 +779,44 @@ def do_fci(mol,mf,args,specout):
         myfci.kernel()
     else:
         myfci.eci,myfci.ci = myfci.kernel(h1e, eri, norb, nelec)
-    # myci.eci is E_HF + E_corr, not just E_corr
-    specout['E'].update({'FCI':myfci.eci})
     FCI_C = list()
     for a in range(args.e):
         if args.e > 1:
-            trdm = myfci.trans_rdm1(myfci.ci[a],myfci.ci[0],norb,nelec)
+            trdm = myfci.trans_rdm1(myfci.ci[0],myfci.ci[a],norb,nelec)
             rdm1 = myfci.make_rdm1(myfci.ci[a],norb,nelec)
-            # fci.direct_spin0.make_rdm1(myfci.ci[a],norb,nelec)
             smult = fci.spin_op.spin_square0(myfci.ci[a],norb,nelec)
         else:
-            trdm = myfci.trans_rdm1(myfci.ci,myfci.ci,norb,nelec)
+            trdm = 0
             rdm1 = myfci.make_rdm1(myfci.ci,norb,nelec)
             smult = fci.spin_op.spin_square0(myfci.ci,norb,nelec)
-        FCI_C.append({'trdm':trdm,'rdm1':rdm1,'smult':smult})
+        FCI_C.append({'rdm1':rdm1,'trdm':trdm,'smult':smult})
+    # myci.eci is E_HF + E_corr, not just E_corr
+    specout['E'].update({'FCI':myfci.eci})
     specout['C'].update({'FCI':FCI_C})
     specout['conv'].update({'FCI':myfci.converged})
+    sik,eik = spec_rdm(args.r0,args.l,[x['trdm'] for x in FCI_C],myfci.eci,mf)
+    specout['S'].update({'FCI':{'sik':sik,'eik':eik}})
     
-    return specout
+    return specout,myfci
 
 def do_ccsd(mf,args,specout):
     '''
     CCSD + EOM-EE-CCSD + GF 
     Returns: spectra, RDM / excited state RDM, correlation energies
     '''
-    from pyscf.cc import cc,gf
+    from pyscf import cc
+    from pyscf.cc import gf
     if closed_shell(args.n):
         mycc = cc.RCCSD(mf)
     else:
         mycc = cc.UCCSD(mf)
+    Ha = constants.physical_constants['Hartree energy in eV'][0]
+    ws = args.ccsd_range
+    # convert eV -> Ha
+    ws[0:2] /= Ha
+        
     # Do the ground state CCSD calculation
-    mycc.conv_tol = 1e-7
+    mycc.conv_tol = 1e-7 # default is 1e-7
     mycc.kernel()
     mycc.solve_lambda()
     nocc, nvir = mycc.t1.shape
@@ -686,46 +831,47 @@ def do_ccsd(mf,args,specout):
     	
     # Calculate and biorthonormalise the right and left eigenvectors
     e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
-    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(args.e, left = True)
+    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(args.e, left=True)
     r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
     
-    # Calculate the diagonal of the RDM for each excited state     
+    # Calculate the diagonal of the RDM for each excited state   
     tot = np.zeros((ntot,args.e))
     for i in range(ntot):
         tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
     CCSD_C.append({'erdm':tot})
     
-    specout['E'].update({'CCSD':mycc.e_corr})
-    specout['C'].update({'CCSD':CCSD_C}) # placeholder for RDM
+    specout['E'].update({'CCSD':mycc.e_corr,'EOM_R':e_ee,'EOM_L':e_ee_l})
+    specout['C'].update({'CCSD':CCSD_C})
     specout['conv'].update({'CCSD':mycc.converged})
     
     #----------SPECTRUM DETAILS --------------
     gf1 = gf.OneParticleGF()
-    dw = 0.001
-    wmin = 0.0
-    wmax = 0.01
-    nw = int((wmax-wmin)/dw) + 1
-    omegas = np.linspace(wmin, wmax, nw)
-    eta = 0.000125
+    omegas = np.linspace(ws[0],ws[1],num=ws[2].astype(np.int)) # change steps to int
+    # broadening, power law fit - takes r (nm) -> eV
+    eta = broaden(args.r)/Ha
     gf1.gmres_tol = 1e-5
     
-    dpq = dip_mo(r,args.l,mf.mo_coeff)[2]   
-    dpq = dpq.reshape(ntot,ntot,3)
-    
     #----------EE SPECTRUM SECTION --------------
-    EEgf = gf1.solve_2pgf(mycc,range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dpq)
-    spectrum = np.zeros((len(omegas)))
+    if hasattr(mf,'dmo'):
+        dmo = mf.dmo
+    else:
+        dmo = dip_mo(args.r0,args.l,mf.mo_coeff)[2] # 3xNxN 
+    #dpq = dpq.reshape(ntot,ntot,3) # transpose
+    dmo = np.transpose(dmo,(1,2,0)) # NxNx3
+    EEgf = gf1.solve_2pgf(mycc,range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dmo)
+    spectrum = np.zeros(omegas.size)
     for p in range(ntot):
         for r in range(ntot):
-            if (all(dpq[p,r,:] == 0)): continue
-            for q in range(ntot):
-                for s in range(ntot):
-                    spectrum -= np.imag(EEgf[p,q,r,s,:])
+            if dmo[p,r,:].any():
+                spectrum -= EEgf[p,:,r,:,:].imag.sum(axis=(0,1))
+    #for p in range(ntot):
+    #    for r in range(ntot):
+    #        if (all(dmo[p,r,:] == 0)): continue
+    #        for q in range(ntot):
+    #            for s in range(ntot):
+    #                spectrum -= np.imag(EEgf[p,q,r,s,:])
     spectrum /= np.pi
-        
-    with open("EEspectrum_l"+str(args.l)+"_r"+str(int(r))+".txt", "w") as f:
-        for i,s in enumerate(spectrum):
-            f.write(str(wmin+dw*i) + "    " + str(s) + "\n")
+    specout['S'].update({'CCSD':{'sik':spectrum,'eik':omegas}})
     
     return specout
 
@@ -736,10 +882,11 @@ if __name__ == '__main__':
     specout = {'E':dict(),'C':dict(),'S':dict(),'conv':dict(),'args':args}
     
     # AO
-    specout = do_ao(args,specout)
+    if 'O' in args.T:
+        specout = do_ao(args,specout)
     
     # HF
-    mf,specout = do_hf(mf,args,specout)
+    specout,mf = do_hf(mf,args,specout)
 
     # All flavours of singles spectroscopy
     specout = do_singles(mf,args,specout)
@@ -751,11 +898,11 @@ if __name__ == '__main__':
 
     # FCI
     if 'F' in args.T:
-        specout = do_fci(mol,mf,args,specout)
+        specout = do_fci(mol,mf,args,specout)[0]
          
     # (R/U)CCSD + EOM-EE + GF spectrum
     if 'E' in args.T:
-        specout = do_ccsd()
+        specout = do_ccsd(mf,args,specout)
     
     # save results ------------------------------------------------------------
     if args.j != 0:
