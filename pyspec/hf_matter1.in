@@ -1,11 +1,6 @@
-# singles with changing l
--e 0 -n 18 -r 1 -T OMRATCH -s 0.25 -l 10
--e 0 -n 18 -r 2 -T OMRATCH -s 0.25 -l 10
--e 0 -n 18 -r 4 -T OMRATCH -s 0.25 -l 10
--e 0 -n 18 -r 6 -T OMRATCH -s 0.25 -l 10
--e 0 -n 18 -r 8 -T OMRATCH -s 0.25 -l 10
--e 0 -n 32 -r 1 -T OMRATCH -s 0.25 -l 10
--e 0 -n 32 -r 2 -T OMRATCH -s 0.25 -l 10
--e 0 -n 32 -r 4 -T OMRATCH -s 0.25 -l 10
--e 0 -n 32 -r 6 -T OMRATCH -s 0.25 -l 10
--e 0 -n 32 -r 8 -T OMRATCH -s 0.25 -l 10
+# FCI
+-e 0 -n 2 -r 1 -T F -s 0.25 -l 4
+-e 0 -n 2 -r 2 -T F -s 0.25 -l 4
+-e 0 -n 2 -r 4 -T F -s 0.25 -l 4
+-e 0 -n 2 -r 6 -T F -s 0.25 -l 4
+-e 0 -n 2 -r 8 -T F -s 0.25 -l 4

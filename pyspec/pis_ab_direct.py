@@ -11,8 +11,8 @@ directly diagonalize A/B methods
 import numpy as np
 import time
 
-from pyscf import tddft
-from pyscf.tddft import rhf_slow
+from pyscf import logger
+import rhf_slow
 from scipy import linalg
 
 def pickeig(w, v):
@@ -36,16 +36,13 @@ def direct_TDHF(mf):
     '''
     A/B w/ exchange (=TDHF/RPA)
     '''
-    print()
-    print('************************************************')
-    print('Diagonalization of full A/B hamiltonian for TDHF')
-    print('************************************************')
-    td = tddft.TDHF(mf)
+    log = logger.Logger(mf.stdout, mf.verbose)
+    log.info('Diagonalize the full A/B hamiltonian for TDHF')
+    td = rhf_slow.TDHF(mf)
     vind,hdiag = td.gen_vind(td._scf)
-    print('Building matrix ...')
-    start_time = time.time()
+    cput0 = time.clock(), time.time()
     H = vind(np.identity(hdiag.size))
-    print(time.strftime("%H:%M:%S", time.gmtime(time.time() - start_time)))
+    log.timer('Build full A/B H for TDHF',*cput0)
     w,v = linalg.eig(H)
     w,v,idx = pickeig(w,v)
     # list comprehensions grab by row, so transpose V
@@ -60,17 +57,14 @@ def direct_dRPA(mf):
     
     Returns a td object (dRPA/TDH -> TDHF -> rhf.TDHF)
     '''
-    print()
-    print('************************************************************')
-    print('Diagonalization of full A/B hamiltonian for direct RPA / TDH')
-    print('************************************************************')
+    log = logger.Logger(mf.stdout, mf.verbose)
+    log.info('Diagonalize the full A/B hamiltonian for dRPA (TDH)')
     td = rhf_slow.dRPA(mf)
     td.eris = td.ao2mo()
     vind,hdiag = td.gen_vind(mf)
-    print('Building matrix ...')
-    start_time = time.time()
+    cput0 = time.clock(), time.time()
     H = vind(np.identity(hdiag.size))
-    print(time.strftime("%H:%M:%S", time.gmtime(time.time() - start_time)))
+    log.timer('Build full A/B H for dRPA/TDH',*cput0)
     w,v = linalg.eig(H)
     w,v,idx = pickeig(w,v)
     xy = [norm_xy(td,z) for z in v.T]

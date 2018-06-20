@@ -10,7 +10,7 @@ Created on Mon Sep 25 15:13:24 2017
 3/23/2018 - add python functions for calculating spectra
 """
 
-import os, glob, argparse
+import os, glob, argparse, h5py
 import numpy as np
 import scipy.io as sio
 from scipy import constants
@@ -76,7 +76,8 @@ def getArgs():
     args = parser.parse_args()
     
     # convert lmax to an array [n of l=0,n of l=1,...] or just lmax = args.l
-    args.l = np.asarray(args.l.split(',')).astype(np.int)
+    args.l_string = args.l
+    args.l = np.asarray(args.l.split('-'),dtype='int_')
     if args.l.size == 1:
         args.l = args.l[0]
     
@@ -113,9 +114,9 @@ def pis_ao(lmax):
         ln = np.transpose(np.nonzero(sphjz**2 <= sphjz[lmax,0]**2))
         ln = ln.astype(np.int_)
     else:
-        ln = np.zeros((lmax.sum(),2),dtype=np.int)
+        ln = np.zeros((lmax.sum(),2),dtype=np.int_)
         ln[:,0] = np.repeat(np.r_[0:lmax.size],lmax)
-        for l,n in enumerate(lmax):
+        for l,n in enumerate(lmax): # ind, value
             ln[ln[:,0]==l,1] = np.r_[0:n]
     
     # sort by l first, then n
@@ -252,7 +253,11 @@ def Ulmax(lmax):
     nl,ind = np.unique(np.c_[n,lm[:,0]],return_index=True,axis=0)
     nl = nl[np.argsort(ind)]
     U_new = list()
-    for a in range(0,lmax+1):
+    if np.isscalar(lmax):
+        lmax += 1
+    else:
+        lmax = lmax.size
+    for a in range(0,lmax):
         b = np.nonzero(nl[:,1]==a)
         step = b[0].size
         Us_size = step*(2*a+1)
@@ -519,10 +524,14 @@ def init_pis():
     E_scale = 1/(2*args.s*np.square(args.r0))
     
     # load the mat file
-    l_path = os.path.normpath('../basissets_8fold/' + '*l{}*.mat'.format(args.l))
+    l_path = os.path.normpath('../basissets_8fold/' + '*l{}_*.mat'.format(args.l_string))
     #l_path = os.path.normpath('../basissets/' + '*l{}*.mat'.format(args.l))
     basisset_path = glob.glob(l_path)[0]
-    mat_contents = sio.loadmat(basisset_path,matlab_compatible=True)
+    
+    # .mat
+    #mat_contents = sio.loadmat(basisset_path,matlab_compatible=True)
+    # hdf5
+    mat_contents = h5py.File(basisset_path,'r')
 
     mol = gto.M()
     mol.verbose = 7
@@ -532,14 +541,15 @@ def init_pis():
     mol.nelectron = args.n
     # prevent pHF from crashing, i.e. force it to use provided AOs
     mol.incore_anyway = True
-    args.norb = int(mat_contents['args']['N'].item())
+    args.norb = int(mat_contents['args']['N'][0])
     
     # python 3 style printing
     print('PIS pyscf')
-    print('Basis set size: l = {0}, # fn\'s: {1}'.format(args.l,args.norb))
+    print('Basis set size: l = {0}, # fn\'s: {1}'.format(args.l_string,args.norb))
     print('{0} electrons'.format(args.n))
     print('{0} threads'.format(lib.num_threads()))
     print('{0} memory assigned'.format(mol.max_memory))
+    print('{0} scratch directory'.format(lib.param.TMPDIR))
     
     # check if open shell or closed shell problem, based on atomic orbitals
     if not closed_shell(args.n) or 'U' in args.T:
@@ -549,11 +559,15 @@ def init_pis():
         print('Closed shell system')
         mf = scf.RHF(mol)
     
-    # set the core, overlap, and eri integrals
-    mf.get_hcore = lambda *args: mat_contents['Hcore'] * E_scale
-    mf.get_ovlp = lambda *args: mat_contents['ovlp']
-    # get rid of extra dim when sio saves
-    mf._eri = (mat_contents['eri']/ args.d / args.r0).squeeze()
+    # set the core, overlap, and eri integrals - load hdf5 file
+    Hcore = mat_contents['Hcore'][:]*E_scale
+    ovlp = mat_contents['ovlp'][:]
+    eri = (mat_contents['eri'][:]/args.d/args.r0).squeeze()
+    # close
+    mat_contents.close()
+    mf.get_hcore = lambda *args: Hcore
+    mf.get_ovlp = lambda *args: ovlp
+    mf._eri = eri
     mf.init_guess = '1e'
     
     return mol,mf,args
@@ -574,6 +588,7 @@ def closed_shell(n):
     [1s 1p 1d 2s 1f 2p 1g 2d ...]
     '''
     #return n in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232]
+    #HF ordering changes from AO for n > 2, so this function is no longer valid
     return True
     
 
@@ -602,16 +617,13 @@ def do_hf(mf,args,specout):
     return specout,mf
 
 def do_singles(mf,args,specout):
-    from pyscf import tddft
-    r = args.r0
-    lmax = args.l
-    
     '''
     sik,eik = polarizability(args,mol,mf,td,ao_dipole=None)
     '''
-    
-    if 'H' in args.T:
-        import pis_ab_direct
+    from pyscf import tddft
+    import rhf_slow, pis_ab_direct
+    r = args.r0
+    lmax = args.l
         
     # (A/B w/ exchange) (=TDHF/RPA)
     if 'T' in args.T:
@@ -620,9 +632,9 @@ def do_singles(mf,args,specout):
             td = pis_ab_direct.direct_TDHF(mf)
             td.converged = True
         else:
-            td = tddft.RPA(mf) # RPA means with exchange in PySCF
+            td = rhf_slow.TDHF(mf) # RPA means with exchange in PySCF
             td.nstates = args.e
-            td.max_cycle = 500
+            #td.max_cycle = 500
             td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'TDHF':td.e})
@@ -642,9 +654,6 @@ def do_singles(mf,args,specout):
         specout['C'].update({'CIS':unpack_xy(td.xy)})
         specout['conv'].update({'CIS':td.converged})
         specout['S'].update({'CIS':{'sik':sik,'eik':eik}})
-    
-    if 'R' in args.T or 'A' in args.T:
-        from pyscf.tddft import rhf_slow
 
     # (A/B w/o exchange) (direct RPA), i.e. TDH
     if 'R' in args.T:
@@ -655,7 +664,7 @@ def do_singles(mf,args,specout):
         else:
             td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
             td.nstates = args.e
-            td.max_cycle = 500
+            #td.max_cycle = 500
             td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'RPA':td.e})
@@ -805,7 +814,7 @@ def do_ccsd(mf,args,specout):
     Returns: spectra, RDM / excited state RDM, correlation energies
     '''
     from pyscf import cc
-    from pyscf.cc import gf
+    import gf
     if closed_shell(args.n):
         mycc = cc.RCCSD(mf)
     else:
@@ -831,14 +840,14 @@ def do_ccsd(mf,args,specout):
     	
     # Calculate and biorthonormalise the right and left eigenvectors
     e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
-    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(args.e, left=True)
-    r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
-    
-    # Calculate the diagonal of the RDM for each excited state   
-    tot = np.zeros((ntot,args.e))
-    for i in range(ntot):
-        tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
-    CCSD_C.append({'erdm':tot})
+    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(nroots=args.e, left=True)
+    if args.e != 1:
+        r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
+        # Calculate the diagonal of the RDM for each excited state   
+        tot = np.zeros((ntot,args.e))
+        for i in range(ntot):
+            tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
+        CCSD_C.append({'erdm':tot})
     
     specout['E'].update({'CCSD':mycc.e_corr,'EOM_R':e_ee,'EOM_L':e_ee_l})
     specout['C'].update({'CCSD':CCSD_C})

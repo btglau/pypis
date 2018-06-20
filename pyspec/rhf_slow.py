@@ -13,11 +13,12 @@ import tempfile
 import numpy
 import numpy as np
 import h5py
+import ao2mo_custom
 
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf import ao2mo
-from pyscf.mp.mp2 import _mo_energy_without_core, _mo_without_core, _active_idx
+from pyscf.mp.mp2 import _active_idx
 
 from pyscf.tddft import rhf
 
@@ -307,7 +308,8 @@ dTDA = TDHTDA
 
 
 def _mem_usage(nocc, nvir):
-    incore = (nocc+nvir)**4
+    # super compact form, transforming only the integrals needed
+    incore = nocc*(nocc+nvir)*(nocc+nvir)*(nocc+nvir+1)/2
     # Roughly, factor of two for safety 
     incore *= 2
     basic = 3*nocc**2*nvir**2
@@ -318,8 +320,7 @@ def _mem_usage(nocc, nvir):
 class _ERIS:
     '''Almost identical to gw ERIS except only oovv, ovov, ovvo.
     '''
-    def __init__(self, cc, mo_coeff=None, method='incore',
-                 ao2mofn=ao2mo.full):
+    def __init__(self, cc, mo_coeff=None):
         cput0 = (time.clock(), time.time())
         moidx = _active_idx(cc)
         if mo_coeff is None:
@@ -329,6 +330,7 @@ class _ERIS:
         dm = cc._scf.make_rdm1(cc.mo_coeff, cc.mo_occ)
         fockao = cc._scf.get_hcore() + cc._scf.get_veff(cc.mol, dm)
         self.fock = reduce(numpy.dot, (mo_coeff.T, fockao, mo_coeff))
+        self.dtype = mo_coeff.dtype
 
         nocc = cc.nocc
         nmo = cc.nmo
@@ -336,30 +338,28 @@ class _ERIS:
         mem_incore, mem_outcore, mem_basic = _mem_usage(nocc, nvir)
         mem_now = lib.current_memory()[0]
 
-        log = logger.Logger(cc.stdout, cc.verbose)
-        if (method == 'incore' and (mem_incore+mem_now < cc.max_memory)
-            or cc.mol.incore_anyway):
-            if ao2mofn == ao2mo.full:
-                if cc._scf._eri is not None:
-                    eri = ao2mo.restore(1, ao2mofn(cc._scf._eri, mo_coeff), nmo)
-                else:
-                    eri = ao2mo.restore(1, ao2mofn(cc._scf.mol, mo_coeff, compact=0), nmo)
-            else:
-                eri = ao2mofn(cc._scf.mol, (mo_coeff,mo_coeff,mo_coeff,mo_coeff), compact=0)
-                if mo_coeff.dtype == np.float: eri = eri.real
-                eri = eri.reshape((nmo,)*4)
+        orbo = mo_coeff[:,:nocc]
+        mo_list = (orbo,mo_coeff,mo_coeff,mo_coeff)
 
-            self.dtype = eri.dtype
-            self.ovov = eri[:nocc,nocc:,:nocc,nocc:].copy()
-            self.oovv = eri[:nocc,:nocc,nocc:,nocc:].copy()
-            self.ovvo = eri[:nocc,nocc:,nocc:,:nocc].copy()
+        log = logger.Logger(cc.stdout, cc.verbose)
+        if mem_incore+mem_now < cc.max_memory:
+            eri = ao2mo.incore.general(cc._scf._eri, mo_list)
+            self.ovov = numpy.empty((nocc,nvir,nocc,nvir))
+            self.oovv = numpy.empty((nocc,nocc,nvir,nvir))
+            self.ovvo = numpy.empty((nocc,nvir,nvir,nocc))
+
+            buf = numpy.empty((nmo,nmo,nmo))
+            for i in range(nocc):
+                lib.unpack_tril(eri[i*nmo:(i+1)*nmo], out=buf)
+                self.ovov[i] = buf[nocc:,:nocc,nocc:]
+                self.oovv[i] = buf[:nocc,nocc:,nocc:]
+                self.ovvo[i] = buf[nocc:,nocc:,:nocc]
+            buf = None
 
         elif hasattr(cc._scf, 'with_df') and cc._scf.with_df:
             raise NotImplementedError
-
+            
         else:
-            orbo = mo_coeff[:,:nocc]
-            self.dtype = mo_coeff.dtype
             ds_type = mo_coeff.dtype.char
             self.feri = lib.H5TmpFile()
             self.ovov = self.feri.create_dataset('ovov', (nocc,nvir,nocc,nvir), ds_type)
@@ -368,7 +368,7 @@ class _ERIS:
 
             cput1 = time.clock(), time.time()
             tmpfile2 = tempfile.NamedTemporaryFile(dir=lib.param.TMPDIR)
-            ao2mo.general(cc.mol, (orbo,mo_coeff,mo_coeff,mo_coeff), tmpfile2.name, 'aa')
+            ao2mo_custom.general(mf, mo_list, tmpfile2.name, 'aa')
             with h5py.File(tmpfile2.name) as f:
                 buf = numpy.empty((nmo,nmo,nmo))
                 for i in range(nocc):
@@ -378,7 +378,6 @@ class _ERIS:
                     self.ovvo[i] = buf[nocc:,nocc:,:nocc]
                 del(f['aa'])
                 buf = None
-
             cput1 = log.timer_debug1('transforming oopq, ovpq', *cput1)
 
         log.timer('TDSCF integral transformation', *cput0)
