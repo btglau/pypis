@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#
+# Author: Bryan Lau
 # -*- coding: utf-8 -*-
 """
 Created on Thu May 17 11:05:22 2018
@@ -9,8 +12,7 @@ A module that will do on-disk transformation of two electron integrals, and
 also return specific slices of (o)ccupied and (v)irtual ones needed for post HF
 """
 
-import numpy
-import h5py
+import numpy, h5py, tempfile
 
 from pyscf import lib
 from pyscf.lib import logger
@@ -46,7 +48,7 @@ def general(mf, mo_coeffs, erifile, dataname='eri_mo',
             and return the "plain" MO integrals
     '''
     log = logger.Logger(mf.stdout, mf.verbose)
-    log.info('******* ao2mo transform on disk, custom eri *******')
+    log.info('******** ao2mo disk, custom eri ********')
     eri = mf._eri
     
     nmoi = mo_coeffs[0].shape[1]
@@ -206,8 +208,8 @@ def incore_custom(eri, mo_coeffs, compact=True):
     '''For the given four sets of orbitals, transfer arbitrary spherical AO
     integrals to MO integrals incore. Capability of reduced transformation.
     
-    This function is worse than the pyscf native implementation that actually
-    supports transforming only a subset
+    This function is far worse than the pyscf native implementation that actually
+    supports transforming only a subset (ao2mo general)
     
     Args:
         eri : 8-fold reduced eri vector
@@ -222,7 +224,7 @@ def incore_custom(eri, mo_coeffs, compact=True):
             and return the "plain" MO integrals
     '''
     log = logger.Logger(mf.stdout, mf.verbose)
-    log.info('********* ao2mo transform in memory, custom eri *********')
+    log.info('******** ao2mo in memory, custom eri ********')
     
     nmoi = mo_coeffs[0].shape[1]
     nmoj = mo_coeffs[1].shape[1]
@@ -238,10 +240,8 @@ def incore_custom(eri, mo_coeffs, compact=True):
         ij_red = True
         nij_pair = nmoi*nmoj
     if compact and iden_coeffs(mo_coeffs[2], mo_coeffs[3]):
-        kl_red = False
         nkl_pair = nmok*(nmok+1) // 2
     else:
-        kl_red = True
         nkl_pair = nmok*nmol
     
     log.debug('Memory information:')
@@ -284,7 +284,7 @@ def iden_coeffs(mo1, mo2):
     return (id(mo1) == id(mo2)) or (mo1.shape==mo2.shape and numpy.allclose(mo1,mo2))
 
 if __name__ == '__main__':
-    import pis_hf, tempfile, time
+    import pis_hf, time
     from pyscf import ao2mo
     
     # start the calculation

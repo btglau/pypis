@@ -126,7 +126,7 @@
 
 
 # new input style
-# HF/singles
+# AO/HF/singles
 # l 8 with high electron counts can take up to -m 64
 # singles with changing l
 -e 0 -n 2 -r 1 -T OMRATCH -s 0.25 -l 8
@@ -149,6 +149,10 @@
 -e 0 -n 32 -r 4 -T OMRATCH -s 0.25 -l 8
 -e 0 -n 32 -r 6 -T OMRATCH -s 0.25 -l 8
 -e 0 -n 32 -r 8 -T OMRATCH -s 0.25 -l 8
+
+-l 6-5-5-4-4-3-3
+-l 7-6-6-5-5-4-4
+-l 8-7-7-6-6-5-5
 
 # CCSD
 # about an hour for 100 points

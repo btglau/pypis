@@ -1,6 +1,6 @@
-# CCSD - took more than a day!
--e 1 -n 8 -r 1 -T E -s 0.25 -l 4 -R 0,7,100
--e 1 -n 8 -r 2 -T E -s 0.25 -l 4 -R 0,3,100
--e 1 -n 8 -r 4 -T E -s 0.25 -l 4 -R 0,1.5,100
--e 1 -n 8 -r 6 -T E -s 0.25 -l 4 -R 0,1,100
--e 1 -n 8 -r 8 -T E -s 0.25 -l 4 -R 0,0.6,100
+# singles test
+#-e 0 -n 32 -r 1 -T OMRATCH -s 0.25 -l 12
+#-e 0 -n 32 -r 2 -T OMRATCH -s 0.25 -l 12
+-e 0 -n 32 -r 4 -T OMRATCH -s 0.25 -l 12
+#-e 0 -n 32 -r 6 -T OMRATCH -s 0.25 -l 12
+#-e 0 -n 32 -r 8 -T OMRATCH -s 0.25 -l 12

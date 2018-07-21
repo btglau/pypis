@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+#
+# Author: Bryan Lau
 # -*- coding: utf-8 -*-
 """
 Created on Mon Sep 25 15:13:24 2017
@@ -13,6 +16,7 @@ Created on Mon Sep 25 15:13:24 2017
 import os, glob, argparse, h5py
 import numpy as np
 import scipy.io as sio
+from itertools import compress
 from scipy import constants
 from scipy.integrate import quad
 from scipy.special import spherical_jn
@@ -405,8 +409,8 @@ def spec_singles(R,lmax,mf,td):
         
     # prune td.xy and td.e to return only non-zero vectors
     ind = sik > np.finfo(np.float_).eps
-    td.xy = [td.xy[c] for c in range(len(td.xy)) if ind[c]]
-    td.e = [td.e[c] for c in range(len(td.xy)) if ind[c]]
+    td.xy = list(compress(td.xy, ind))
+    td.e = list(compress(td.e, ind))
     eik = eik[ind]
     sik = sik[ind]
     sik *= 2
@@ -534,7 +538,7 @@ def init_pis():
     mat_contents = h5py.File(basisset_path,'r')
 
     mol = gto.M()
-    mol.verbose = 7
+    mol.verbose = 5
     # if nelectrons is None (initial call to function), then it sets it to
     # tot_electrons = (sum of atom charges - charge)
     # nelectrons = total electrons
@@ -589,6 +593,7 @@ def closed_shell(n):
     '''
     #return n in [2,8,18,20,34,40,58,68,90,92,106,132,138,168,186,196,198,232]
     #HF ordering changes from AO for n > 2, so this function is no longer valid
+    # 2 8 18 32 50 72 new order
     return True
     
 
@@ -620,21 +625,20 @@ def do_singles(mf,args,specout):
     '''
     sik,eik = polarizability(args,mol,mf,td,ao_dipole=None)
     '''
-    from pyscf import tddft
-    import rhf_slow, pis_ab_direct
+    import rhf_slow
     r = args.r0
     lmax = args.l
+    td = rhf_slow.TDHF(mf)
+    eris = td.ao2mo()
         
     # (A/B w/ exchange) (=TDHF/RPA)
     if 'T' in args.T:
-        td = None
+        td.eris = eris
         if 'H' in args.T:
-            td = pis_ab_direct.direct_TDHF(mf)
+            td.direct()
             td.converged = True
         else:
-            td = rhf_slow.TDHF(mf) # RPA means with exchange in PySCF
             td.nstates = args.e
-            #td.max_cycle = 500
             td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'TDHF':td.e})
@@ -643,12 +647,16 @@ def do_singles(mf,args,specout):
         specout['S'].update({'TDHF':{'sik':sik,'eik':eik}})
         #td.e td.xy td.converged
     
-    # (A/- w/ exchange) (=CIS) (+TDA)
+    # (A/- w/ exchange) (=CIS/TDA)
     if 'C' in args.T:
-        td = None
-        td = tddft.TDA(mf)
-        td.nstates = args.e
-        td.kernel()
+        td = rhf_slow.CIS(mf)
+        td.eris = eris
+        if 'H' in args.T:
+            td.direct()
+            td.converged = True
+        else:
+            td.nstates = args.e
+            td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'CIS':td.e})
         specout['C'].update({'CIS':unpack_xy(td.xy)})
@@ -657,14 +665,13 @@ def do_singles(mf,args,specout):
 
     # (A/B w/o exchange) (direct RPA), i.e. TDH
     if 'R' in args.T:
-        td = None
+        td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
+        td.eris = eris
         if 'H' in args.T:
-            td = pis_ab_direct.direct_dRPA(mf)
+            td.direct()
             td.converged = True
         else:
-            td = rhf_slow.dRPA(mf) # equivalent to tddft.TDH(mf)
             td.nstates = args.e
-            #td.max_cycle = 500
             td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'RPA':td.e})
@@ -674,10 +681,14 @@ def do_singles(mf,args,specout):
     
     # (A/- w/o exchange) (direct TDA), i.e TDH-TDA
     if 'A' in args.T:
-        td = None
         td = rhf_slow.dTDA(mf)
-        td.nstates = args.e
-        td.kernel()
+        td.eris = eris
+        if 'H' in args.T:
+            td.direct()
+            td.converged = True
+        else:
+            td.nstates = args.e
+            td.kernel()
         sik,eik = spec_singles(r,lmax,mf,td)
         specout['E'].update({'TDA':td.e})
         specout['C'].update({'TDA':unpack_xy(td.xy)})
@@ -823,42 +834,40 @@ def do_ccsd(mf,args,specout):
     ws = args.ccsd_range
     # convert eV -> Ha
     ws[0:2] /= Ha
-        
-    # Do the ground state CCSD calculation
-    mycc.conv_tol = 1e-7 # default is 1e-7
+
+    # Do the ground state CCSD calculation - needed for gf.py
     mycc.kernel()
     mycc.solve_lambda()
-    nocc, nvir = mycc.t1.shape
-    ntot = nocc+nvir
+    ntot = mycc.nmo
     
-    CCSD_C = list()
-    # Calculate the diagonal of the RDM for ground state      
-    rdm = np.zeros(ntot)
-    for i in range(ntot):
-        rdm[i] = gf.rdm(mycc,i,i)
-    CCSD_C.append({'rdm':rdm})
-    	
-    # Calculate and biorthonormalise the right and left eigenvectors
-    e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
-    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(nroots=args.e, left=True)
-    if args.e != 1:
-        r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
-        # Calculate the diagonal of the RDM for each excited state   
-        tot = np.zeros((ntot,args.e))
-        for i in range(ntot):
-            tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
-        CCSD_C.append({'erdm':tot})
-    
-    specout['E'].update({'CCSD':mycc.e_corr,'EOM_R':e_ee,'EOM_L':e_ee_l})
-    specout['C'].update({'CCSD':CCSD_C})
-    specout['conv'].update({'CCSD':mycc.converged})
+#    CCSD_C = list()
+#    # Calculate the diagonal of the RDM for ground state      
+#    rdm = np.zeros(ntot)
+#    for i in range(ntot):
+#        rdm[i] = gf.rdm(mycc,i,i)
+#    CCSD_C.append({'rdm':rdm})
+#    	
+#    # Calculate and biorthonormalise the right and left eigenvectors
+#    e_ee, r_ee = mycc.eomee_ccsd_singlet(nroots=args.e)
+#    e_ee_l, l_ee = mycc.eomee_ccsd_singlet(nroots=args.e, left=True)
+#    if args.e != 1:
+#        r_ee, l_ee = mycc.biorthonormalize(r_ee,l_ee,e_ee,e_ee_l)
+#        # Calculate the diagonal of the RDM for each excited state   
+#        tot = np.zeros((ntot,args.e))
+#        for i in range(ntot):
+#            tot[i,:] = gf.e_rdm(mycc,i,i,r_ee,l_ee)
+#        CCSD_C.append({'erdm':tot})
+#    
+#    specout['E'].update({'CCSD':mycc.e_corr,'EOM_R':e_ee,'EOM_L':e_ee_l})
+#    specout['C'].update({'CCSD':CCSD_C})
+#    specout['conv'].update({'CCSD':mycc.converged})
     
     #----------SPECTRUM DETAILS --------------
-    gf1 = gf.OneParticleGF()
+    gf1 = gf.OneParticleGF(mycc)
     omegas = np.linspace(ws[0],ws[1],num=ws[2].astype(np.int)) # change steps to int
     # broadening, power law fit - takes r (nm) -> eV
     eta = broaden(args.r)/Ha
-    gf1.gmres_tol = 1e-5
+    #gf1.gmres_tol = 1e-5
     
     #----------EE SPECTRUM SECTION --------------
     if hasattr(mf,'dmo'):
@@ -867,7 +876,7 @@ def do_ccsd(mf,args,specout):
         dmo = dip_mo(args.r0,args.l,mf.mo_coeff)[2] # 3xNxN 
     #dpq = dpq.reshape(ntot,ntot,3) # transpose
     dmo = np.transpose(dmo,(1,2,0)) # NxNx3
-    EEgf = gf1.solve_2pgf(mycc,range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dmo)
+    EEgf = gf1.solve_2pgf(range(ntot),range(ntot),range(ntot),range(ntot),omegas,eta,dmo)
     spectrum = np.zeros(omegas.size)
     for p in range(ntot):
         for r in range(ntot):
@@ -898,7 +907,8 @@ if __name__ == '__main__':
     specout,mf = do_hf(mf,args,specout)
 
     # All flavours of singles spectroscopy
-    specout = do_singles(mf,args,specout)
+    if 'T' in args.T or 'C' in args.T or 'R' in args.T or 'A' in args.T:
+        specout = do_singles(mf,args,specout)
     
     # CISD
     # e_corr is lowest eigenvalue, ci is lowest ev (from davidson diag)

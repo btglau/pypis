@@ -1,10 +1,14 @@
-import collections
-import sys
+#!/usr/bin/env python
+#
+# Author: Alan Lewis
+# Updated by Bryan Lau for pyscf 1.5
+
+import collections, time
 
 import numpy as np
-np.set_printoptions(threshold=np.nan)
 import scipy
-from pyscf import lib
+#from pyscf.cc import eom_rccsd
+from pyscf.lib import logger
 
 def greens_func_multiply(ham,vector,linear_part,args=None):
     return np.array(ham(vector) + (linear_part)*vector)
@@ -14,7 +18,7 @@ def greens_func_multiply(ham,vector,linear_part,args=None):
 ##################################
 
 def rdm(cc,p,q):
-    return greens_e0_ee_rhf(cc,p,q) + 2*(q == s)
+    return greens_e0_ee_rhf(cc,p,q) + 2*(q == p)
    
 def tdm(cc,p,q,r_ee):
     if cc.r0 is None: cc.r0 = cc.get_r0(r_ee)
@@ -480,10 +484,12 @@ def initial_ee_guess(cc):
 ###################
 
 class OneParticleGF:
-    def __init__(self):
+    def __init__(self,cc):
         self.gmres_tol = 1e-6
+        self._cc = cc
 
-    def solve_ip(self,cc,ps,qs,omega_list,broadening):
+    def solve_ip(self,ps,qs,omega_list,broadening):
+        cc = self._cc
         if not isinstance(ps, collections.Iterable): ps = [ps]
         if not isinstance(qs, collections.Iterable): qs = [qs]
         print(" solving ip portion...")
@@ -508,39 +514,9 @@ class OneParticleGF:
             return gfvals[0,0,:]
         else:
             return gfvals
-            
-    def solve_2ppe(self,cc,ps,qs,omega_list,broadening,r1_ee,r2_ee,l1_ee,l2_ee,e):
-        if not isinstance(ps, collections.Iterable): ps = [ps]
-        if not isinstance(qs, collections.Iterable): qs = [qs]
-        print(" solving ip portion...")
-        x0 = initial_2ppe_guess(cc)
-        p0 = 0.0*x0 + 1.0
-        n = len(x0)
-        e_vector = list() 
-        for q in qs:
-            e_vector.append(greens_e_vector_2ppe_rhf(cc,q,l1_ee,l2_ee))
-        gfvals = np.zeros((len(ps),len(qs),len(omega_list)),dtype=np.complex)
-        for ip,p in enumerate(ps):
-            b_vector = greens_b_vector_2ppe_rhf(cc,p,r1_ee,r2_ee)
-            for iomega in range(len(omega_list)):
-                curr_omega = omega_list[iomega]
-                def matr_multiply(vector,args=None):
-                    return greens_func_multiply(cc.ipccsd_matvec, vector, curr_omega-e-1j*broadening)
-                
-                counter = gmres_counter()
-                H = scipy.sparse.linalg.LinearOperator((n,n), matvec = matr_multiply)
-                sol, info = scipy.sparse.linalg.gmres(H,-b_vector, x0 = x0, restart = 100, tol = self.gmres_tol, callback = counter)
-                print(info,counter.niter)
-                    
-                x0  = sol
-                for iq,q in enumerate(qs):
-                    gfvals[ip,iq,iomega]  = np.dot(e_vector[iq],sol)
-        if len(ps) == 1 and len(qs) == 1:
-            return gfvals[0,0,:]
-        else:
-            return gfvals
 
-    def solve_ea(self,cc,ps,qs,omega_list,broadening):
+    def solve_ea(self,ps,qs,omega_list,broadening):
+        cc = self._cc
         if not isinstance(ps, collections.Iterable): ps = [ps]
         if not isinstance(qs, collections.Iterable): qs = [qs]
         print(" solving ea portion...")
@@ -566,18 +542,61 @@ class OneParticleGF:
         else:
             return gfvals
 
-    def kernel(self,cc,p,q,omega_list,broadening):
+    def kernel(self,p,q,omega_list,broadening):
+        cc = self._cc
         return self.solve_ip(cc,p,q,omega_list,broadening), self.solve_ea(cc,p,q,omega_list,broadening)
     
-    def solve_2pgf(self,cc,ps,qs,rs,ss,omega_list,broadening,dpq = None):
+    def solve_2ppe(self,ps,qs,omega_list,broadening,r1_ee,r2_ee,l1_ee,l2_ee,e):
+        cc = self._cc
+        if not isinstance(ps, collections.Iterable): ps = [ps]
+        if not isinstance(qs, collections.Iterable): qs = [qs]
+        print(" solving ip portion...")
+        x0 = initial_2ppe_guess(cc)
+        p0 = 0.0*x0 + 1.0
+        n = len(x0)
+        e_vector = list()
+        for q in qs:
+            e_vector.append(greens_e_vector_2ppe_rhf(cc,q,l1_ee,l2_ee))
+        gfvals = np.zeros((len(ps),len(qs),len(omega_list)),dtype=np.complex)
+        for ip,p in enumerate(ps):
+            b_vector = greens_b_vector_2ppe_rhf(cc,p,r1_ee,r2_ee)
+            for iomega in range(len(omega_list)):
+                curr_omega = omega_list[iomega]
+                def matr_multiply(vector,args=None):
+                    return greens_func_multiply(cc.ipccsd_matvec, vector, curr_omega-e-1j*broadening)
+                
+                counter = gmres_counter()
+                H = scipy.sparse.linalg.LinearOperator((n,n), matvec = matr_multiply)
+                sol, info = scipy.sparse.linalg.gmres(H,-b_vector, x0 = x0, restart = 100, tol = self.gmres_tol, callback = counter)
+                print(info,counter.niter)
+                    
+                x0  = sol
+                for iq,q in enumerate(qs):
+                    gfvals[ip,iq,iomega]  = np.dot(e_vector[iq],sol)
+        if len(ps) == 1 and len(qs) == 1:
+            return gfvals[0,0,:]
+        else:
+            return gfvals
+        
+    def solve_2pgf(self,ps,qs,rs,ss,omega_list,broadening,dpq = None):
+        mycc = self._cc
+        log = logger.Logger(mycc.stdout,mycc.verbose)
+        log.info('')
+        log.info('******** {} for {} ********'.format(self.__class__,mycc.__class__))
+        #mycc.verbose = 4 # eeccsd_matvec_singlet spits out timing info, clutters if GMRES calls many times
+        #myee = eom_rccsd.EOMEESinglet(mycc)
+        #imds = myee.make_imds()
+        #mymatvec = lambda x: myee.matvec(x,imds=imds)
+        mymatvec = mycc.eomee_ccsd_matvec_singlet
+        
         if not isinstance(ps, collections.Iterable): ps = [ps]
         if not isinstance(qs, collections.Iterable): qs = [qs]
         if not isinstance(rs, collections.Iterable): rs = [rs]
         if not isinstance(ss, collections.Iterable): ss = [ss]
 
-        nocc,nvir = cc.t1.shape
-        x0 = initial_ee_guess(cc)
-        p0 = 0.0*x0 + 1.0
+        nocc,nvir = mycc.t1.shape
+        x0 = initial_ee_guess(mycc)
+        #p0 = 0.0*x0 + 1.0
         n = len(x0)
         #e_vector = np.zeros((len(qs),len(ss),n),dtype=np.complex)
         e_vectors = []
@@ -587,37 +606,36 @@ class OneParticleGF:
             for ns,s in enumerate(ss):
                 e_vectors[nq].append([])
                 if not (dpq is None) and (all(dpq[q,s,:] == 0)): continue
-                e_vector = greens_e_vector_ee_rhf(cc,q,s)
+                e_vector = greens_e_vector_ee_rhf(mycc,q,s)
                 idx = np.flatnonzero(e_vector)
                 val = e_vector[idx]
                 e_vectors[nq][ns] = [idx,val]
-                #e_vector[nq,ns,:] = greens_e_vector_ee_rhf(cc,q,s)
-                e0s[nq,ns] = greens_e0_ee_rhf(cc,q,s)
-        
-        sys.stdout.flush()
+                #e_vector[nq,ns,:] = greens_e_vector_ee_rhf(mycc,q,s)
+                e0s[nq,ns] = greens_e0_ee_rhf(mycc,q,s)
   
         gfvals = np.zeros((len(ps),len(qs),len(rs),len(ss),len(omega_list)),dtype=np.complex)
         for ip,p in enumerate(ps):
             for nr,r in enumerate(rs):
                 
                 if not (dpq is None) and (all(dpq[p,r,:] == 0)): continue
-                print("Solve Linear System for p =",p,"r =",r)
+                time0 = time.clock(), time.time()
                 
-                b_vector = greens_b_vector_ee_rhf(cc,p,r)
-
+                b_vector = greens_b_vector_ee_rhf(mycc,p,r)
                 for iomega in range(len(omega_list)):
                     curr_omega = omega_list[iomega]
                     def matr_multiply(vector,args=None):
-                        return greens_func_multiply(cc.eomee_ccsd_matvec_singlet, vector, -curr_omega-1j*broadening)
-                    print(iomega)
+                        # https://github.com/sunqm/pyscf/blob/25e7dc0a8259fabf8bd2bfa96d87b1acf3f3d666/pyscf/cc/ccsd.py#L475
+                        # assert(t2.dtype == numpy.double)
+                        # commented out as t2.dtype = float64
+                        return greens_func_multiply(mymatvec, vector, -curr_omega-1j*broadening)
                     
                     counter = gmres_counter()
                     H = scipy.sparse.linalg.LinearOperator((n,n), matvec = matr_multiply)
                     #P = scipy.sparse.linalg.LinearOperator((n,n), matvec = precond)
                     sol, info = scipy.sparse.linalg.gmres(H,-b_vector, x0 = x0, restart = 150, tol = self.gmres_tol, callback = counter)
-                    print(info,counter.niter)
+                    log.debug('    step/w: {}/{:.3e}, GMRES info: {}, Total iters: {}'.format(iomega,curr_omega,info,counter.niter))
                     
-                    s0 = -np.dot(sol,cc.amplitudes_to_vector(cc.l1,cc.l2))
+                    s0 = -np.dot(sol,mycc.amplitudes_to_vector(mycc.l1,mycc.l2))
                     #s0 += 2*(p == r)*(r < nocc)
                     #s0 /= curr_omega+1j*broadening
                     
@@ -636,6 +654,7 @@ class OneParticleGF:
                            #total = np.dot(e_vector[nq,ns,:],sol)
                            total += e0s[nq,ns]*s0
                            gfvals[ip,nq,nr,ns,iomega] = total*dot
+                time0 = log.timer("solve linear system for p = {}, r = {}".format(p,r), *time0)
         
         if len(ps) == 1 and len(qs) == 1 and len(rs) == 1 and len(ss) == 1:
             return gfvals[0,0,0,0,:]

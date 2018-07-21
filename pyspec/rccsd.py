@@ -1914,6 +1914,14 @@ class RCCSD(ccsd.CCSD):
         t2ab = t2ab.reshape(nocc,nvir,nocc,nvir).transpose(0,2,1,3).copy()
         return t1, (t2aa, t2ab)
 
+def _mem_usage(nocc, nvir):
+    incore = (nocc+nvir)**4
+    # Roughly, factor of two for intermediates and factor of two
+    # for safety (temp arrays, copying, etc)
+    incore *= 4
+    # TODO: Improve incore estimate and add outcore estimate
+    outcore = basic = incore
+    return incore*8/1e6, outcore*8/1e6, basic*8/1e6
 
 class _ERIS:
     def __init__(self, cc, mo_coeff=None, method='incore',
@@ -2285,15 +2293,6 @@ def _add_vvvv1_(cc, t2, eris, Ht2):
         Ht2[:,:,:i] += lib.einsum('ijf,abf->ijab', t2[:,:,i], vvv[:i])
         vvv = None
     return Ht2
-
-def _mem_usage(nocc, nvir):
-    incore = (nocc+nvir)**4
-    # Roughly, factor of two for intermediates and factor of two
-    # for safety (temp arrays, copying, etc)
-    incore *= 4
-    # TODO: Improve incore estimate and add outcore estimate
-    outcore = basic = incore
-    return incore*8/1e6, outcore*8/1e6, basic*8/1e6
 
 def _cp(a):
     return numpy.array(a, copy=False, order='C')
