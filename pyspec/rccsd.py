@@ -1,3 +1,10 @@
+'''
+from: psycf/cc/rccsd
+
+author: Qiming Sun
+edited by: Bryan Lau
+'''
+
 import time
 import tempfile
 from functools import reduce
